@@ -338,6 +338,7 @@ func (kc *KeycloakClient) CreateUser(username, password string, groups []string)
 
 	user := map[string]interface{}{
 		"username": username,
+		"email":    fmt.Sprintf("%s@test.dev", username),
 		"credentials": []map[string]interface{}{
 			{
 				"temporary": false,

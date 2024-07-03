@@ -14,6 +14,7 @@ import (
 
 	configv1 "github.com/openshift/api/config/v1"
 	configv1client "github.com/openshift/client-go/config/clientset/versioned/typed/config/v1"
+	v1 "github.com/openshift/client-go/operator/clientset/versioned/typed/operator/v1"
 	routev1client "github.com/openshift/client-go/route/clientset/versioned/typed/route/v1"
 	"github.com/openshift/library-go/pkg/config/clusteroperator/v1helpers"
 	"github.com/openshift/library-go/pkg/operator/resource/retry"
@@ -137,4 +138,31 @@ func WaitForHTTPStatus(t *testing.T, waitDuration time.Duration, client *http.Cl
 		}
 		return false, nil
 	})
+}
+
+func WaitForNewKASRollout(t *testing.T, ctx context.Context, kasClient v1.KubeAPIServerInterface, origRevision int32) error {
+	err := wait.PollUntilContextTimeout(ctx, 10*time.Second, 30*time.Minute, true, func(ctx context.Context) (bool, error) {
+		kas, err := kasClient.Get(ctx, "cluster", metav1.GetOptions{})
+		if errors.IsNotFound(err) || retry.IsHTTPClientError(err) {
+			t.Logf("kube-apiserver 'cluster' error (will retry): %v", err)
+			return false, nil
+
+		} else if err != nil {
+			return false, err
+		}
+
+		for _, nodeStatus := range kas.Status.NodeStatuses {
+			if kas.Status.LatestAvailableRevision == origRevision || nodeStatus.CurrentRevision != kas.Status.LatestAvailableRevision {
+				t.Logf("%s: %d (want %d)\n", nodeStatus.NodeName, nodeStatus.CurrentRevision, kas.Status.LatestAvailableRevision)
+				return false, nil
+			}
+		}
+
+		return true, nil
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
