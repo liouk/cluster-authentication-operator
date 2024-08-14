@@ -218,12 +218,12 @@ func (tc *testClient) setupExternalOIDCWithKeycloak(ctx context.Context) (kcClie
 	require.NoError(tc.t, err)
 
 	// sync service-ca signing certificate to the KAS nodes as a static resource so that it can be used with --oidc-ca-file
-	c, err = tc.syncServingCA(ctx, authConfig)
+	c, err = tc.syncServingCA(ctx)
 	cleanups = append(cleanups, c...)
 	require.NoError(tc.t, err)
 
 	// setup kube-apiserver to access the external OIDC directly by modifying its args via UnsupportedConfigOverrides
-	kasOrigRev, c, err := tc.updateKASArgsForOIDC(ctx, authConfig)
+	kasOrigRev, c, err := tc.updateKASArgsForOIDC(ctx, kcClient.IssuerURL())
 	cleanups = append(cleanups, c...)
 	require.NoError(tc.t, err)
 
@@ -295,16 +295,15 @@ func (tc *testClient) updateProxyForIngressCert(ctx context.Context) (cleanups [
 	return
 }
 
-func (tc *testClient) syncServingCA(ctx context.Context, authConfig *configv1.Authentication) (cleanups []func(), err error) {
-	oidcCAConfigMapName := authConfig.Spec.OIDCProviders[0].Issuer.CertificateAuthority.Name
-	if len(oidcCAConfigMapName) == 0 {
-		// no oidc CA present; ignore
+func (tc *testClient) syncServingCA(ctx context.Context) (cleanups []func(), err error) {
+	if len(oidcCABundleConfigMap) == 0 || len(oidcCABundleConfigMapNamespace) == 0 {
+		tc.t.Log("no oidc CA defined; will use system CA")
 		return nil, nil
 	}
 
 	tc.t.Log("will sync OIDC ca-bundle to KAS static pod resources")
 
-	signingKey, err := tc.kubeClient.CoreV1().Secrets(oidcCABundleConfigMapNamespace).Get(ctx, oidcCAConfigMapName, metav1.GetOptions{})
+	signingKey, err := tc.kubeClient.CoreV1().Secrets(oidcCABundleConfigMapNamespace).Get(ctx, oidcCABundleConfigMap, metav1.GetOptions{})
 	if err != nil {
 		return
 	}
@@ -335,11 +334,11 @@ func (tc *testClient) syncServingCA(ctx context.Context, authConfig *configv1.Au
 	return
 }
 
-func (tc *testClient) updateKASArgsForOIDC(ctx context.Context, authConfig *configv1.Authentication) (origRevision int32, cleanups []func(), err error) {
+func (tc *testClient) updateKASArgsForOIDC(ctx context.Context, idpURL string) (origRevision int32, cleanups []func(), err error) {
 	tc.t.Log("will update KAS args for OIDC")
 
 	oidcCAFile := "/etc/kubernetes/static-pod-certs/configmaps/trusted-ca-bundle/ca-bundle.crt"
-	if len(authConfig.Spec.OIDCProviders[0].Issuer.CertificateAuthority.Name) > 0 {
+	if len(oidcCABundleConfigMap) > 0 {
 		oidcCAFile = "/etc/kubernetes/static-pod-resources/configmaps/oidc-serving-ca/ca-bundle.crt"
 	}
 
@@ -352,7 +351,7 @@ func (tc *testClient) updateKASArgsForOIDC(ctx context.Context, authConfig *conf
 			"oidc-username-claim": ["%s"],
 			"oidc-username-prefix":["-"]
 		}
-	}`, oidcCAFile, oidcClientId, authConfig.Spec.OIDCProviders[0].Issuer.URL, oidcGroupsClaim, oidcUsernameClaim)
+	}`, oidcCAFile, oidcClientId, idpURL, oidcGroupsClaim, oidcUsernameClaim)
 
 	kas, err := tc.operatorConfigClient.OperatorV1().KubeAPIServers().Get(ctx, "cluster", metav1.GetOptions{})
 	if err != nil {

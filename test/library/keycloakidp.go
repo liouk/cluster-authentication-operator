@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"testing"
@@ -240,7 +239,7 @@ func (kc *KeycloakClient) AuthenticatePassword(clientID, clientSecret, name, pas
 	}
 	defer resp.Body.Close()
 
-	respBytes, err := ioutil.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
@@ -297,7 +296,7 @@ func (kc *KeycloakClient) CreateClientGroupMapper(clientId, mapperName, groupsCl
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		respBytes, _ := ioutil.ReadAll(resp.Body)
+		respBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed creating mapper %q: %s %s", mapperName, resp.Status, respBytes)
 	}
 
@@ -325,7 +324,7 @@ func (kc *KeycloakClient) CreateGroup(groupName string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		respBytes, _ := ioutil.ReadAll(resp.Body)
+		respBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed creating group %q: %s %s", groupName, resp.Status, respBytes)
 	}
 
@@ -364,7 +363,7 @@ func (kc *KeycloakClient) CreateUser(username, password string, groups []string)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		respBytes, _ := ioutil.ReadAll(resp.Body)
+		respBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed creating user %q: %s %s", username, resp.Status, respBytes)
 	}
 
@@ -381,7 +380,7 @@ func (kc *KeycloakClient) ListUsers() ([]map[string]interface{}, error) {
 	}
 	defer resp.Body.Close()
 
-	respBytes, err := ioutil.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +422,7 @@ func (kc *KeycloakClient) UpdateUser(id string, changes map[string]interface{}) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		respBytes, _ := ioutil.ReadAll(resp.Body)
+		respBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed updating user %q: %s: %s", id, resp.Status, respBytes)
 	}
 
@@ -440,7 +439,7 @@ func (kc *KeycloakClient) GetUser(id string) (map[string]interface{}, error) {
 	}
 	defer resp.Body.Close()
 
-	respBytes, err := ioutil.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -463,7 +462,7 @@ func (kc *KeycloakClient) ListUserGroups(id string) ([]map[string]interface{}, e
 	}
 	defer resp.Body.Close()
 
-	respBytes, err := ioutil.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -541,7 +540,7 @@ func (kc *KeycloakClient) UpdateClient(id string, changedFields map[string]inter
 	}
 	defer resp.Body.Close()
 
-	respBytes, err := ioutil.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
@@ -564,7 +563,7 @@ func (kc *KeycloakClient) GetClient(id string) (map[string]interface{}, error) {
 	}
 	defer resp.Body.Close()
 
-	respBytes, err := ioutil.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -604,7 +603,7 @@ func (kc *KeycloakClient) ListClients() ([]map[string]interface{}, error) {
 	}
 	defer resp.Body.Close()
 
-	respBytes, err := ioutil.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -628,7 +627,7 @@ func (kc *KeycloakClient) RegenerateClientSecret(id string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	respBytes, err := ioutil.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
 	}
