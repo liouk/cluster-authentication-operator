@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,21 +19,21 @@ import (
 	test "github.com/openshift/cluster-authentication-operator/test/library"
 	"github.com/stretchr/testify/require"
 
+	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/storage/names"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/cache"
-	watchtools "k8s.io/client-go/tools/watch"
 )
 
 const (
-	externalOIDCFeatureGate = "ExternalOIDC"
+	// TODO: this duplicates the constant defined here: https://github.com/openshift/api/blob/ce6b9c8ad5e785e337869b3bf0f71deeff7bf0eb/features/features.go#L428
+	// until we resolve a dependency breaking compatibility and are able to reference it directly
+	featureGateExternalOIDC = configv1.FeatureGateName("ExternalOIDC")
 
 	oidcClientId      = "admin-cli"
 	oidcAudience      = "openshift-aud"
@@ -74,11 +75,27 @@ func TestExternalOIDCWithKeycloak(t *testing.T) {
 	tc, err := newTestClient(t)
 	require.NoError(t, err)
 
-	oidcEnabled, err := tc.featureGateEnabled(testCtx, externalOIDCFeatureGate)
-	require.NoError(t, err)
-	if !oidcEnabled {
-		t.Skipf("%s feature gate disabled", externalOIDCFeatureGate)
+	// ===============================
+	// Check ExternalOIDC feature gate
+	// ===============================
+
+	featureGates, err := tc.configClient.ConfigV1().FeatureGates().Get(testCtx, "cluster", metav1.GetOptions{})
+	require.NoError(tc.t, err)
+
+	if len(featureGates.Status.FeatureGates) != 1 {
+		// fail test if there are multiple feature gate versions (i.e. ongoing upgrade)
+		tc.t.Fatalf("multiple feature gate versions detected")
+	} else {
+		for _, fgDisabled := range featureGates.Status.FeatureGates[0].Disabled {
+			if fgDisabled.Name == featureGateExternalOIDC {
+				tc.t.Skipf("feature gate '%s' disabled", featureGateExternalOIDC)
+			}
+		}
 	}
+
+	// ==============
+	// Setup Keycloak
+	// ==============
 
 	var kcClient *test.KeycloakClient
 	if keycloakURL := os.Getenv("E2E_KEYCLOAK_URL"); len(keycloakURL) > 0 {
@@ -97,10 +114,6 @@ func TestExternalOIDCWithKeycloak(t *testing.T) {
 		t.Logf("keycloak Admin URL: %s", kcClient.AdminURL())
 	}
 
-	// ==============================
-	// Do some Keycloak sanity checks
-	// ==============================
-
 	kcAdminClient, err := kcClient.GetClientByClientID(oidcClientId)
 	require.NoError(t, err)
 	require.NotEmpty(t, kcAdminClient)
@@ -110,8 +123,9 @@ func TestExternalOIDCWithKeycloak(t *testing.T) {
 	require.NoError(t, err)
 
 	user := names.SimpleNameGenerator.GenerateName("e2e-keycloak-user-")
+	email := fmt.Sprintf("%s@test.dev", user)
 	password := "password"
-	err = kcClient.CreateUser(user, password, []string{group})
+	err = kcClient.CreateUser(user, email, password, []string{group})
 	require.NoError(t, err)
 
 	httpClient := &http.Client{Transport: &http.Transport{
@@ -144,18 +158,28 @@ func TestExternalOIDCWithKeycloak(t *testing.T) {
 	// ==========================================
 	// Test authentication via the kube-apiserver
 	// ==========================================
-	kasURL := fmt.Sprintf("%s/api/v1/namespaces", tc.kubeConfig.Host)
-	req, err := http.NewRequest(http.MethodGet, kasURL, nil)
+
+	// use the OIDC id_token to do a self subject review
+	kasURL := fmt.Sprintf("%s/apis/authentication.k8s.io/v1/selfsubjectreviews", tc.kubeConfig.Host)
+	ssrReq := `{"kind":"SelfSubjectReview","apiVersion":"authentication.k8s.io/v1"}`
+	req, err := http.NewRequest(http.MethodPost, kasURL, strings.NewReader(ssrReq))
 	require.NoError(t, err)
 
 	// kubernetes uses the id_token to identify the user (instead of the access_token)
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", authResponse.IdToken))
+	req.Header.Set("Content-Type", "application/json")
 	resp, err = httpClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-	// user is authenticated (request is forbidden due to insufficient permissions)
-	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	var ssr authenticationv1.SelfSubjectReview
+	err = json.Unmarshal(body, &ssr)
+	require.NoError(t, err)
+	require.Equal(t, email, ssr.Status.UserInfo.Username)
+	require.Contains(t, ssr.Status.UserInfo.Groups, "system:authenticated")
 }
 
 func newTestClient(t *testing.T) (*testClient, error) {
@@ -237,27 +261,13 @@ func (tc *testClient) setupExternalOIDCWithKeycloak(ctx context.Context) (kcClie
 	return
 }
 
-func (tc *testClient) featureGateEnabled(ctx context.Context, featureGateName string) (bool, error) {
-	featureGates, err := tc.configClient.ConfigV1().FeatureGates().Get(ctx, "cluster", metav1.GetOptions{})
-	if err != nil {
-		return false, err
-	}
-
-	for _, fgStatus := range featureGates.Status.FeatureGates {
-		for _, fgEnabled := range fgStatus.Enabled {
-			if fgEnabled.Name == configv1.FeatureGateName(featureGateName) {
-				return true, nil
-			}
-		}
-	}
-
-	return false, nil
-}
-
 func (tc *testClient) updateProxyForIngressCert(ctx context.Context) (cleanups []func(), err error) {
 	tc.t.Log("will copy default-ingress-cert and patch proxy")
 
 	defaultIngressCert, err := tc.kubeClient.CoreV1().ConfigMaps("openshift-config-managed").Get(ctx, "default-ingress-cert", metav1.GetOptions{})
+	if err != nil {
+		return
+	}
 
 	cmCopy := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -268,6 +278,12 @@ func (tc *testClient) updateProxyForIngressCert(ctx context.Context) (cleanups [
 	}
 
 	_, err = tc.kubeClient.CoreV1().ConfigMaps("openshift-config").Create(ctx, cmCopy, metav1.CreateOptions{})
+	cleanups = append(cleanups, func() {
+		err := tc.kubeClient.CoreV1().ConfigMaps("openshift-config").Delete(ctx, cmCopy.Name, metav1.DeleteOptions{})
+		if err != nil && !errors.IsNotFound(err) {
+			tc.t.Fatalf("cleanup failed for configmap '%s/%s': %v", cmCopy.Namespace, cmCopy.Name, err)
+		}
+	})
 	if err != nil {
 		return
 	}
@@ -280,17 +296,16 @@ func (tc *testClient) updateProxyForIngressCert(ctx context.Context) (cleanups [
 	origTrustedCAName := proxy.Spec.TrustedCA.Name
 	proxy.Spec.TrustedCA.Name = "default-ingress-cert"
 	proxy, err = tc.configClient.ConfigV1().Proxies().Update(ctx, proxy, metav1.UpdateOptions{})
-	if err != nil {
-		return
-	}
-
 	cleanups = append(cleanups, func() {
 		proxy.Spec.TrustedCA.Name = origTrustedCAName
 		proxy, err = tc.configClient.ConfigV1().Proxies().Update(ctx, proxy, metav1.UpdateOptions{})
 		if err != nil {
-			tc.t.Logf("cleanup failed for proxy '%s': %v", proxy.Name, err)
+			tc.t.Fatalf("cleanup failed for proxy '%s': %v", proxy.Name, err)
 		}
 	})
+	if err != nil {
+		return
+	}
 
 	return
 }
@@ -319,17 +334,15 @@ func (tc *testClient) syncServingCA(ctx context.Context) (cleanups []func(), err
 	}
 
 	_, err = tc.kubeClient.CoreV1().ConfigMaps(kasNamespace).Create(ctx, oidcServingCA, metav1.CreateOptions{})
+	cleanups = append(cleanups, func() {
+		err := tc.kubeClient.CoreV1().ConfigMaps(kasNamespace).Delete(ctx, oidcServingCA.Name, metav1.DeleteOptions{})
+		if err != nil && !errors.IsNotFound(err) {
+			tc.t.Fatalf("cleanup failed for secret '%s/%s': %v", oidcServingCA.Namespace, oidcServingCA.Name, err)
+		}
+	})
 	if err != nil {
 		return
 	}
-
-	cleanups = append(cleanups, func() {
-		err := tc.kubeClient.CoreV1().ConfigMaps(kasNamespace).Delete(ctx, oidcServingCA.Name, metav1.DeleteOptions{})
-		if err != nil {
-			tc.t.Logf("cleanup failed for secret '%s/%s': %v", oidcServingCA.Namespace, oidcServingCA.Name, err)
-			return
-		}
-	})
 
 	return
 }
@@ -363,31 +376,27 @@ func (tc *testClient) updateKASArgsForOIDC(ctx context.Context, idpURL string) (
 	kas.Spec.UnsupportedConfigOverrides = runtime.RawExtension{Raw: []byte(unsupportedConfigOverrides)}
 
 	kas, err = tc.operatorConfigClient.OperatorV1().KubeAPIServers().Update(ctx, kas, metav1.UpdateOptions{})
-	if err != nil {
-		return
-	}
-
 	cleanups = append(cleanups, func() {
 		kas, err := tc.operatorConfigClient.OperatorV1().KubeAPIServers().Get(ctx, "cluster", metav1.GetOptions{})
 		if err != nil {
-			tc.t.Logf("cleanup failed for kube-apiserver '%s', while getting fresh object: %v", kas.Name, err)
-			return
+			tc.t.Fatalf("cleanup failed for kube-apiserver '%s', while getting fresh object: %v", kas.Name, err)
 		}
 
 		origRevision := kas.Status.LatestAvailableRevision
 		kas.Spec.UnsupportedConfigOverrides = origUnsupportedConfigOverides
 		kas, err = tc.operatorConfigClient.OperatorV1().KubeAPIServers().Update(ctx, kas, metav1.UpdateOptions{})
 		if err != nil {
-			tc.t.Logf("cleanup failed for kube-apiserver '%s': %v", kas.Name, err)
-			return
+			tc.t.Fatalf("cleanup failed for kube-apiserver '%s': %v", kas.Name, err)
 		}
 
 		err = test.WaitForNewKASRollout(tc.t, ctx, tc.operatorConfigClient.OperatorV1().KubeAPIServers(), origRevision)
 		if err != nil {
-			tc.t.Logf("cleanup failed for kube-apiserver '%s': %v", kas.Name, err)
-			return
+			tc.t.Fatalf("cleanup failed for kube-apiserver '%s': %v", kas.Name, err)
 		}
 	})
+	if err != nil {
+		return
+	}
 
 	return
 }
@@ -437,35 +446,16 @@ func (tc *testClient) updateAuthForOIDC(ctx context.Context, idpURL, idpName str
 	}
 
 	_, err = tc.configClient.ConfigV1().Authentications().Update(ctx, auth, metav1.UpdateOptions{})
-	if err != nil {
-		return
-	}
-
 	cleanups = append(cleanups, func() {
 		auth.Spec = *origSpec
 		_, err = tc.configClient.ConfigV1().Authentications().Update(ctx, auth, metav1.UpdateOptions{})
 		if err != nil {
-			tc.t.Logf("cleanup failed for authentication '%s': %v", auth.Name, err)
+			tc.t.Fatalf("cleanup failed for authentication '%s': %v", auth.Name, err)
 		}
 	})
-
-	// wait for auth CR to get patched
-	origGen := auth.Generation
-	waitOIDCClientAvailableFunc := func(event watch.Event) (bool, error) {
-		auth := event.Object.(*configv1.Authentication)
-		patched := auth.Generation > origGen
-		return patched, nil
+	if err != nil {
+		return
 	}
-
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	cleanups = append(cleanups, cancel)
-
-	_, err = watchtools.UntilWithSync(ctxWithTimeout,
-		cache.NewListWatchFromClient(tc.configClient.ConfigV1().RESTClient(), "authentications", "", fields.OneTermEqualSelector("metadata.name", "cluster")),
-		&configv1.Authentication{},
-		nil,
-		waitOIDCClientAvailableFunc,
-	)
 
 	return
 }
