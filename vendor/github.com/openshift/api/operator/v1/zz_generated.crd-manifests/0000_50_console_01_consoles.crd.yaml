@@ -77,6 +77,49 @@ spec:
                     - Azure
                     - ROSA
                     type: string
+                  capabilities:
+                    description: capabilities defines an array of capabilities that
+                      can be interacted with in the console UI. Each capability defines
+                      a visual state that can be interacted with the console to render
+                      in the UI. Available capabilities are LightspeedButton. Each
+                      of the available capabilities may appear only once in the list.
+                    items:
+                      description: Capabilities contains set of UI capabilities and
+                        their state in the console UI.
+                      properties:
+                        name:
+                          description: name is the unique name of a capability. Available
+                            capabilities are LightspeedButton.
+                          enum:
+                          - LightspeedButton
+                          type: string
+                        visibility:
+                          description: visibility defines the visibility state of
+                            the capability.
+                          properties:
+                            state:
+                              description: state defines if the capability is enabled
+                                or disabled in the console UI. Enabling the capability
+                                in the console UI is represented by the "Enabled"
+                                value. Disabling the capability in the console UI
+                                is represented by the "Disabled" value.
+                              enum:
+                              - Enabled
+                              - Disabled
+                              type: string
+                          required:
+                          - state
+                          type: object
+                      required:
+                      - name
+                      - visibility
+                      type: object
+                    maxItems: 1
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
                   customLogoFile:
                     description: 'customLogoFile replaces the default OpenShift logo
                       in the masthead and about dialog. It is a reference to a ConfigMap
@@ -455,6 +498,42 @@ spec:
                           type: string
                         type: array
                     type: object
+                type: object
+              ingress:
+                description: ingress allows to configure the alternative ingress for
+                  the console. This field is intended for clusters without ingress
+                  capability, where access to routes is not possible.
+                properties:
+                  clientDownloadsURL:
+                    description: clientDownloadsURL is a URL to be used as the address
+                      to download client binaries. If not specified, the downloads
+                      route hostname will be used. This field is required for clusters
+                      without ingress capability, where access to routes is not possible.
+                      The console operator will monitor the URL and may go degraded
+                      if it's unreachable for an extended period. Must use the HTTPS
+                      scheme.
+                    maxLength: 1024
+                    type: string
+                    x-kubernetes-validations:
+                    - message: client downloads url must be a valid absolute URL
+                      rule: size(self) == 0 || isURL(self)
+                    - message: client downloads url scheme must be https
+                      rule: size(self) == 0 || url(self).getScheme() == 'https'
+                  consoleURL:
+                    description: consoleURL is a URL to be used as the base console
+                      address. If not specified, the console route hostname will be
+                      used. This field is required for clusters without ingress capability,
+                      where access to routes is not possible. Make sure that appropriate
+                      ingress is set up at this URL. The console operator will monitor
+                      the URL and may go degraded if it's unreachable for an extended
+                      period. Must use the HTTPS scheme.
+                    maxLength: 1024
+                    type: string
+                    x-kubernetes-validations:
+                    - message: console url must be a valid absolute URL
+                      rule: size(self) == 0 || isURL(self)
+                    - message: console url scheme must be https
+                      rule: size(self) == 0 || url(self).getScheme() == 'https'
                 type: object
               logLevel:
                 default: Normal
