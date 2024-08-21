@@ -14,6 +14,7 @@ import (
 	"time"
 
 	configv1 "github.com/openshift/api/config/v1"
+	features "github.com/openshift/api/features"
 	configclient "github.com/openshift/client-go/config/clientset/versioned"
 	operatorversionedclient "github.com/openshift/client-go/operator/clientset/versioned"
 	test "github.com/openshift/cluster-authentication-operator/test/library"
@@ -31,10 +32,6 @@ import (
 )
 
 const (
-	// TODO: this duplicates the constant defined here: https://github.com/openshift/api/blob/ce6b9c8ad5e785e337869b3bf0f71deeff7bf0eb/features/features.go#L428
-	// until we resolve a dependency breaking compatibility and are able to reference it directly
-	featureGateExternalOIDC = configv1.FeatureGateName("ExternalOIDC")
-
 	oidcClientId      = "admin-cli"
 	oidcAudience      = "openshift-aud"
 	oidcGroupsClaim   = "groups"
@@ -87,8 +84,8 @@ func TestExternalOIDCWithKeycloak(t *testing.T) {
 		tc.t.Fatalf("multiple feature gate versions detected")
 	} else {
 		for _, fgDisabled := range featureGates.Status.FeatureGates[0].Disabled {
-			if fgDisabled.Name == featureGateExternalOIDC {
-				tc.t.Skipf("feature gate '%s' disabled", featureGateExternalOIDC)
+			if fgDisabled.Name == features.FeatureGateExternalOIDC {
+				tc.t.Skipf("feature gate '%s' disabled", features.FeatureGateExternalOIDC)
 			}
 		}
 	}
