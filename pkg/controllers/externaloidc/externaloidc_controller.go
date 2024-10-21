@@ -2,6 +2,7 @@ package externaloidc
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -23,6 +24,7 @@ import (
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/util/cert"
+	certutil "k8s.io/client-go/util/cert"
 	"k8s.io/utils/ptr"
 )
 
@@ -226,7 +228,7 @@ func (c *externalOIDCController) generateAuthConfig(auth configv1.Authentication
 
 // TODO currently validations from k8s.io/apiserver/pkg/apis/apiserver/validation cannot be used here
 // since they aren't defined for the beta type; once the feature goes out of beta, we should replace
-// this func with the upstream validations
+// this func with the upstream validations (but keep CA cert validation)
 func validateAuthenticationConfiguration(auth apiserverv1beta1.AuthenticationConfiguration) (errs []error) {
 	if len(auth.JWT) == 0 {
 		errs = append(errs, fmt.Errorf("no JWT issuers defined"))
@@ -254,6 +256,11 @@ func validateAuthenticationConfiguration(auth apiserverv1beta1.AuthenticationCon
 					errs = append(errs, fmt.Errorf("URL must not contain a fragment"))
 				}
 			}
+
+			if len(errs) > 0 {
+				// if we found URL issues, stop validation to avoid breaking further validations
+				return errs
+			}
 		}
 
 		// validate issuer audiences
@@ -273,9 +280,13 @@ func validateAuthenticationConfiguration(auth apiserverv1beta1.AuthenticationCon
 
 		// validate issuer CA
 		if len(jwt.Issuer.CertificateAuthority) > 0 {
-			_, err := cert.NewPoolFromBytes([]byte(jwt.Issuer.CertificateAuthority))
+			caCertPool, err := cert.NewPoolFromBytes([]byte(jwt.Issuer.CertificateAuthority))
 			if err != nil {
 				errs = append(errs, fmt.Errorf("issuer CA is invalid: %v", err))
+			}
+
+			if err := validateCACert(jwt.Issuer.URL, caCertPool); err != nil {
+				errs = append(errs, fmt.Errorf("could not validate IDP URL with specified CA cert: %v", err))
 			}
 		}
 
@@ -305,6 +316,27 @@ func validateAuthenticationConfiguration(auth apiserverv1beta1.AuthenticationCon
 	}
 
 	return
+}
+
+func validateCACert(host string, caCertPool *x509.CertPool) error {
+	u, err := url.Parse(host)
+	if err != nil {
+		return fmt.Errorf("invalid host URL: %v", err)
+	}
+
+	servingCerts, _, err := certutil.GetServingCertificates(fmt.Sprintf("%s:%s", u.Hostname(), u.Port()), "")
+	if err != nil {
+		return fmt.Errorf("error while getting serving certs of host '%s': %v", host, err)
+	}
+
+	for _, cert := range servingCerts {
+		if _, err := cert.Verify(x509.VerifyOptions{Roots: caCertPool}); err == nil {
+			// we were able to validate a cert of the chain with the current CA cert; success
+			return nil
+		}
+	}
+
+	return fmt.Errorf("could not verify the serving cert(s) from host '%s' using the provided CA cert", host)
 }
 
 // syncAuthConfig serializes the structured auth config into a configmap

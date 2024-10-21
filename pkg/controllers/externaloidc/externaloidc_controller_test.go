@@ -1,14 +1,25 @@
 package externaloidc
 
 import (
+	"bytes"
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/api/features"
@@ -39,16 +50,12 @@ var (
 		nil,
 	)
 
-	testCertData = func() string {
-		caPrivateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	baseCACert, baseCAPrivateKey, testCertData = func() (*x509.Certificate, crypto.Signer, string) {
+		cert, key, err := generateCAKeyPair()
 		if err != nil {
 			panic(err)
 		}
-		caCert, err := certutil.NewSelfSignedCACert(certutil.Config{CommonName: "test-ca"}, caPrivateKey)
-		if err != nil {
-			panic(err)
-		}
-		return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caCert.Raw}))
+		return cert, key, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}))
 	}()
 
 	baseAuthResource = *newAuthWithSpec(configv1.AuthenticationSpec{
@@ -196,6 +203,14 @@ var (
 
 func TestExternalOIDCController_sync(t *testing.T) {
 	testCtx := context.Background()
+
+	testServer, err := createTestServer(baseCACert, baseCAPrivateKey)
+	if err != nil {
+		t.Fatalf("could not create test server: %v", err)
+	}
+	defer testServer.Close()
+	testServer.StartTLS()
+
 	for _, tt := range []struct {
 		name string
 
@@ -335,7 +350,11 @@ func TestExternalOIDCController_sync(t *testing.T) {
 			cmApplyReaction: func(action k8stesting.Action) (bool, runtime.Object, error) {
 				return true, &baseAuthConfigCM, nil
 			},
-			auth:        &baseAuthResource,
+			auth: authWithUpdates(baseAuthResource, []func(auth *configv1.Authentication){
+				func(auth *configv1.Authentication) {
+					auth.Spec.OIDCProviders[0].Issuer.URL = testServer.URL
+				},
+			}),
 			expectError: false,
 		},
 	} {
@@ -389,6 +408,13 @@ func TestExternalOIDCController_sync(t *testing.T) {
 }
 
 func TestExternalOIDCController_generateAuthConfig(t *testing.T) {
+	testServer, err := createTestServer(baseCACert, baseCAPrivateKey)
+	if err != nil {
+		t.Fatalf("could not create test server: %v", err)
+	}
+	defer testServer.Close()
+	testServer.StartTLS()
+
 	for _, tt := range []struct {
 		name string
 
@@ -522,11 +548,21 @@ func TestExternalOIDCController_generateAuthConfig(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name:               "valid auth config",
-			auth:               baseAuthResource,
-			caBundleConfigMap:  &baseCABundleConfigMap,
-			expectedAuthConfig: &baseAuthConfig,
-			expectError:        false,
+			name:              "valid auth config",
+			caBundleConfigMap: &baseCABundleConfigMap,
+			auth: *authWithUpdates(baseAuthResource, []func(auth *configv1.Authentication){
+				func(auth *configv1.Authentication) {
+					for i := range auth.Spec.OIDCProviders {
+						auth.Spec.OIDCProviders[i].Issuer.URL = testServer.URL
+					}
+				},
+			}),
+			expectedAuthConfig: authConfigWithUpdates(baseAuthConfig, []func(authConfig *apiserverv1beta1.AuthenticationConfiguration){
+				func(authConfig *apiserverv1beta1.AuthenticationConfiguration) {
+					authConfig.JWT[0].Issuer.URL = testServer.URL
+				},
+			}),
+			expectError: false,
 		},
 		{
 			name: "valid auth config with empty CA name",
@@ -552,6 +588,7 @@ func TestExternalOIDCController_generateAuthConfig(t *testing.T) {
 			auth: *authWithUpdates(baseAuthResource, []func(auth *configv1.Authentication){
 				func(auth *configv1.Authentication) {
 					for i := range auth.Spec.OIDCProviders {
+						auth.Spec.OIDCProviders[i].Issuer.URL = testServer.URL
 						auth.Spec.OIDCProviders[i].ClaimMappings.Username = configv1.UsernameClaimMapping{
 							TokenClaimMapping: configv1.TokenClaimMapping{
 								Claim: "username",
@@ -564,6 +601,7 @@ func TestExternalOIDCController_generateAuthConfig(t *testing.T) {
 			expectedAuthConfig: authConfigWithUpdates(baseAuthConfig, []func(authConfig *apiserverv1beta1.AuthenticationConfiguration){
 				func(authConfig *apiserverv1beta1.AuthenticationConfiguration) {
 					for i := range authConfig.JWT {
+						authConfig.JWT[i].Issuer.URL = testServer.URL
 						authConfig.JWT[i].ClaimMappings.Username = apiserverv1beta1.PrefixedClaimOrExpression{
 							Claim:  "username",
 							Prefix: ptr.To(""),
@@ -579,6 +617,7 @@ func TestExternalOIDCController_generateAuthConfig(t *testing.T) {
 			auth: *authWithUpdates(baseAuthResource, []func(auth *configv1.Authentication){
 				func(auth *configv1.Authentication) {
 					for i := range auth.Spec.OIDCProviders {
+						auth.Spec.OIDCProviders[i].Issuer.URL = testServer.URL
 						auth.Spec.OIDCProviders[i].ClaimMappings.Username = configv1.UsernameClaimMapping{
 							TokenClaimMapping: configv1.TokenClaimMapping{
 								Claim: "username",
@@ -591,6 +630,7 @@ func TestExternalOIDCController_generateAuthConfig(t *testing.T) {
 			expectedAuthConfig: authConfigWithUpdates(baseAuthConfig, []func(authConfig *apiserverv1beta1.AuthenticationConfiguration){
 				func(authConfig *apiserverv1beta1.AuthenticationConfiguration) {
 					for i := range authConfig.JWT {
+						authConfig.JWT[i].Issuer.URL = testServer.URL
 						authConfig.JWT[i].ClaimMappings.Username = apiserverv1beta1.PrefixedClaimOrExpression{
 							Claim:  "username",
 							Prefix: ptr.To("-"),
@@ -782,6 +822,13 @@ func TestExternalOIDCController_syncAuthConfig(t *testing.T) {
 }
 
 func TestExternalOIDCController_validateAuthenticationConfiguration(t *testing.T) {
+	testServer, err := createTestServer(baseCACert, baseCAPrivateKey)
+	if err != nil {
+		t.Fatalf("could not create test server: %v", err)
+	}
+	defer testServer.Close()
+	testServer.StartTLS()
+
 	for _, tt := range []struct {
 		name        string
 		authConfig  apiserverv1beta1.AuthenticationConfiguration
@@ -945,8 +992,12 @@ func TestExternalOIDCController_validateAuthenticationConfiguration(t *testing.T
 			expectError: true,
 		},
 		{
-			name:        "valid auth config",
-			authConfig:  baseAuthConfig,
+			name: "valid auth config",
+			authConfig: *authConfigWithUpdates(baseAuthConfig, []func(authConfig *apiserverv1beta1.AuthenticationConfiguration){
+				func(authConfig *apiserverv1beta1.AuthenticationConfiguration) {
+					authConfig.JWT[0].Issuer.URL = testServer.URL
+				},
+			}),
 			expectError: false,
 		},
 	} {
@@ -962,6 +1013,155 @@ func TestExternalOIDCController_validateAuthenticationConfiguration(t *testing.T
 
 		})
 	}
+}
+
+func TestExternalOIDCController_validateCACert(t *testing.T) {
+	testServer, err := createTestServer(baseCACert, baseCAPrivateKey)
+	if err != nil {
+		t.Fatalf("could not create test server: %v", err)
+	}
+	defer testServer.Close()
+	testServer.StartTLS()
+
+	certPool := x509.NewCertPool()
+	certPool.AddCert(baseCACert)
+
+	t.Run("valid CA cert", func(t *testing.T) {
+		err := validateCACert(testServer.URL, certPool)
+		if err != nil {
+			t.Errorf("got error while not expecting one: %v", err)
+		}
+	})
+
+	t.Run("mismatched CA cert", func(t *testing.T) {
+		anotherCACert, _, err := generateCAKeyPair()
+		if err != nil {
+			t.Errorf("could not generate CA keypair: %v", err)
+		}
+		certPool := x509.NewCertPool()
+		certPool.AddCert(anotherCACert)
+		err = validateCACert(testServer.URL, certPool)
+		if err == nil {
+			t.Errorf("did not get an error while expecting one")
+		}
+	})
+
+	t.Run("invalid URL", func(t *testing.T) {
+		err := validateCACert("not a URL", certPool)
+		if err == nil {
+			t.Errorf("did not get an error while expecting one")
+		}
+	})
+
+	t.Run("unknown URL", func(t *testing.T) {
+		err := validateCACert("https://does-not-exist.com", certPool)
+		if err == nil {
+			t.Errorf("did not get an error while expecting one")
+		}
+	})
+
+	t.Run("nil cert pool", func(t *testing.T) {
+		err := validateCACert("not a URL", nil)
+		if err == nil {
+			t.Errorf("did not get an error while expecting one")
+		}
+	})
+
+	t.Run("empty cert pool", func(t *testing.T) {
+		err := validateCACert("not a URL", x509.NewCertPool())
+		if err == nil {
+			t.Errorf("did not get an error while expecting one")
+		}
+	})
+}
+
+func generateCAKeyPair() (*x509.Certificate, crypto.Signer, error) {
+	caPrivateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	caCert, err := certutil.NewSelfSignedCACert(certutil.Config{CommonName: "test-ca"}, caPrivateKey)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return caCert, caPrivateKey, err
+}
+
+func generateServingCert(caCert *x509.Certificate, caPrivateKey crypto.Signer) (*tls.Certificate, error) {
+	cert := &x509.Certificate{
+		SerialNumber: big.NewInt(2024),
+		Subject: pkix.Name{
+			Organization:  []string{"Company, INC."},
+			Country:       []string{"US"},
+			Province:      []string{""},
+			Locality:      []string{"Springfield"},
+			StreetAddress: []string{"742 Evergreen Terrace"},
+		},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().AddDate(10, 0, 0),
+		SubjectKeyId: []byte{1, 2, 3, 4, 6},
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+
+	certPrivKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		return nil, err
+	}
+
+	certBytes, err := x509.CreateCertificate(rand.Reader, cert, caCert, &certPrivKey.PublicKey, caPrivateKey)
+	if err != nil {
+		return nil, err
+	}
+
+	certPEM := new(bytes.Buffer)
+	pem.Encode(certPEM, &pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certBytes,
+	})
+
+	certPrivKeyPEM := new(bytes.Buffer)
+	pem.Encode(certPrivKeyPEM, &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(certPrivKey),
+	})
+
+	serverCert, err := tls.X509KeyPair(certPEM.Bytes(), certPrivKeyPEM.Bytes())
+	if err != nil {
+		return nil, err
+	}
+
+	return &serverCert, nil
+}
+
+func createTestServer(caCert *x509.Certificate, caPrivateKey crypto.Signer) (*httptest.Server, error) {
+	cert := caCert
+	key := caPrivateKey
+	var err error
+	if caCert == nil {
+		cert, key, err = generateCAKeyPair()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	servingCertPair, err := generateServingCert(cert, key)
+	if err != nil {
+		return nil, err
+	}
+
+	testServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	testServer.TLS = &tls.Config{
+		Certificates: []tls.Certificate{*servingCertPair},
+	}
+
+	return testServer, nil
 }
 
 func makeClosedChannel() chan struct{} {
