@@ -5,23 +5,30 @@ import (
 	"encoding/base64"
 	"fmt"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	corelistersv1 "k8s.io/client-go/listers/core/v1"
 	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
+	clocktesting "k8s.io/utils/clock/testing"
 
 	configv1 "github.com/openshift/api/config/v1"
 	oauthv1 "github.com/openshift/api/oauth/v1"
 	routev1 "github.com/openshift/api/route/v1"
 	configv1listers "github.com/openshift/client-go/config/listers/config/v1"
 	fakeoauthclient "github.com/openshift/client-go/oauth/clientset/versioned/fake"
+	oauthinformers "github.com/openshift/client-go/oauth/informers/externalversions"
 	oauthv1listers "github.com/openshift/client-go/oauth/listers/oauth/v1"
+	operatorv1listers "github.com/openshift/client-go/operator/listers/operator/v1"
 	routev1listers "github.com/openshift/client-go/route/listers/route/v1"
+	"github.com/openshift/cluster-authentication-operator/pkg/controllers/common"
+	"github.com/openshift/cluster-authentication-operator/pkg/controllers/oauthclientsswitchedinformer"
 	"github.com/openshift/library-go/pkg/oauth/oauthdiscovery"
 	"github.com/openshift/library-go/pkg/operator/events"
 )
@@ -104,13 +111,43 @@ func newRouteLister(t *testing.T, routes ...*routev1.Route) routev1listers.Route
 	return routev1listers.NewRouteLister(routeIndexer)
 }
 
+func newAuthLister(t *testing.T) configv1listers.AuthenticationLister {
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	indexer.Add(&configv1.Authentication{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "cluster",
+		},
+		Spec: configv1.AuthenticationSpec{
+			Type: configv1.AuthenticationTypeIntegratedOAuth,
+		},
+	})
+	return configv1listers.NewAuthenticationLister(indexer)
+}
+
 func newTestOAuthsClientsController(t *testing.T) (*oauthsClientsController, cache.Indexer) {
 	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	oauthClientset := fakeoauthclient.NewSimpleClientset()
+	switchedInformer := oauthclientsswitchedinformer.NewSwitchedInformer(
+		"TestOAuthClientsInformerWithSwitchController",
+		context.TODO(),
+		func() (bool, error) { return false, nil },
+		oauthinformers.NewSharedInformerFactoryWithOptions(oauthClientset, 1*time.Minute).Oauth().V1().OAuthClients(),
+		0,
+		nil,
+		events.NewInMemoryRecorder("oauthclientscontroller_test", clocktesting.NewFakePassiveClock(time.Now())),
+	)
+
 	return &oauthsClientsController{
-		oauthClientClient: fakeoauthclient.NewSimpleClientset().OauthV1().OAuthClients(),
-		oauthClientLister: oauthv1listers.NewOAuthClientLister(indexer),
-		routeLister:       newRouteLister(t, defaultRoute),
-		ingressLister:     newIngressLister(t, defaultIngress),
+		ingressLister:       newIngressLister(t, defaultIngress),
+		oauthClientClient:   oauthClientset.OauthV1().OAuthClients(),
+		oauthClientInformer: switchedInformer.Informer(),
+		oauthClientLister:   oauthv1listers.NewOAuthClientLister(indexer),
+		routeLister:         newRouteLister(t, defaultRoute),
+		authConfigChecker: common.NewAuthConfigChecker(
+			&fakeInformer[configv1listers.AuthenticationLister]{newAuthLister(t)},
+			&fakeInformer[operatorv1listers.KubeAPIServerLister]{},
+			&fakeInformer[corelistersv1.ConfigMapLister]{},
+		),
 	}, indexer
 }
 
@@ -548,4 +585,16 @@ func Test_ensureOAuthClient(t *testing.T) {
 			}
 		})
 	}
+}
+
+type fakeInformer[T any] struct {
+	lister T
+}
+
+func (f *fakeInformer[T]) Informer() cache.SharedIndexInformer {
+	return nil
+}
+
+func (f *fakeInformer[T]) Lister() T {
+	return f.lister
 }
