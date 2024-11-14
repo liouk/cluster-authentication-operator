@@ -211,6 +211,7 @@ func prepareOauthOperator(
 		informerFactories.operatorConfigInformer,
 		informerFactories.namespacedOpenshiftAuthenticationRoutes.Route().V1().Routes(),
 		authOperatorInput.authenticationOperatorClient,
+		authConfigChecker,
 		authOperatorInput.eventRecorder,
 	)
 
