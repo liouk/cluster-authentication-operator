@@ -26,6 +26,7 @@ import (
 	"github.com/openshift/library-go/pkg/controller/factory"
 	"github.com/openshift/library-go/pkg/operator/events"
 	"github.com/openshift/library-go/pkg/operator/v1helpers"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -58,12 +59,20 @@ type wellKnownReadyController struct {
 	configMapLister        corev1lister.ConfigMapLister
 	routeLister            routev1lister.RouteLister
 	infrastructureLister   configv1lister.InfrastructureLister
+	authConfigChecker      common.AuthConfigChecker
 }
 
 const controllerName = "WellKnownReadyController"
 
-func NewWellKnownReadyController(instanceName string, kubeInformers v1helpers.KubeInformersForNamespaces, configInformers configinformer.SharedInformerFactory, routeInformer routeinformer.RouteInformer,
-	operatorClient v1helpers.OperatorClient, recorder events.Recorder) factory.Controller {
+func NewWellKnownReadyController(
+	instanceName string,
+	kubeInformers v1helpers.KubeInformersForNamespaces,
+	configInformers configinformer.SharedInformerFactory,
+	routeInformer routeinformer.RouteInformer,
+	operatorClient v1helpers.OperatorClient,
+	authConfigChecker common.AuthConfigChecker,
+	recorder events.Recorder,
+) factory.Controller {
 
 	nsOpenshiftConfigManagedInformers := kubeInformers.InformersFor("openshift-config-managed")
 	nsDefaultInformers := kubeInformers.InformersFor("default")
@@ -77,6 +86,7 @@ func NewWellKnownReadyController(instanceName string, kubeInformers v1helpers.Ku
 		configMapLister:        nsOpenshiftConfigManagedInformers.Core().V1().ConfigMaps().Lister(),
 		routeLister:            routeInformer.Lister(),
 		operatorClient:         operatorClient,
+		authConfigChecker:      authConfigChecker,
 	}
 
 	return factory.New().WithInformers(
@@ -127,6 +137,15 @@ func (c *wellKnownReadyController) sync(ctx context.Context, controllerContext f
 			utilruntime.HandleError(updateErr)
 		}
 	}()
+
+	// if OIDC is enabled, clear operator conditions and skip checks
+	if oidcAvailable, err := c.authConfigChecker.OIDCAvailable(); err != nil {
+		return err
+	} else if oidcAvailable {
+		available = available.WithStatus(operatorv1.ConditionTrue)
+		progressing = progressing.WithStatus(operatorv1.ConditionFalse)
+		return nil
+	}
 
 	// the well-known endpoint cannot be ready until we know the oauth-server's hostname
 	_, err = c.routeLister.Routes("openshift-authentication").Get("oauth-openshift")
@@ -185,7 +204,7 @@ func (c *wellKnownReadyController) isWellknownEndpointsReady(ctx context.Context
 		return nil
 	}
 
-	caData, err := ioutil.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+	caData, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
 	if err != nil {
 		return fmt.Errorf("failed to read SA ca.crt: %v", err)
 	}
