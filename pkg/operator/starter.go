@@ -200,6 +200,7 @@ func prepareOauthOperator(
 		authOperatorInput.kubeClient.CoreV1(),
 		authOperatorInput.kubeClient.CoreV1(),
 		authOperatorInput.authenticationOperatorClient,
+		authConfigChecker,
 		"openshift-authentication",
 		authOperatorInput.eventRecorder)
 
