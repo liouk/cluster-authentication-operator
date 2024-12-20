@@ -15,7 +15,11 @@ import (
 
 	apiregistrationclient "k8s.io/kube-aggregator/pkg/client/clientset_generated/clientset"
 
+	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	apiextensionsinformers "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
+
 	operatorv1 "github.com/openshift/api/operator/v1"
+	authzclient "github.com/openshift/client-go/authorization/clientset/versioned"
 	configclient "github.com/openshift/client-go/config/clientset/versioned"
 	configinformer "github.com/openshift/client-go/config/informers/externalversions"
 	oauthclient "github.com/openshift/client-go/oauth/clientset/versioned"
@@ -48,8 +52,10 @@ type authenticationOperatorInput struct {
 	operatorClient               operatorclient.Interface
 	routeClient                  routeclient.Interface
 	oauthClient                  oauthclient.Interface
+	authzClient                  authzclient.Interface
 	authenticationOperatorClient v1helpers.OperatorClient
 	apiregistrationv1Client      apiregistrationclient.Interface
+	apiextensionsClient          apiextensionsclient.Interface
 	migrationClient              kubemigratorclient.Interface
 	eventRecorder                events.Recorder
 
@@ -84,11 +90,19 @@ func CreateOperatorInputFromMOM(ctx context.Context, momInput libraryapplyconfig
 	if err != nil {
 		return nil, err
 	}
+	authzClient, err := authzclient.NewForConfigAndClient(recommendedRESTConfig, momInput.MutationTrackingClient.GetHTTPClient())
+	if err != nil {
+		return nil, err
+	}
 	apiregistrationv1Client, err := apiregistrationclient.NewForConfigAndClient(recommendedRESTConfig, momInput.MutationTrackingClient.GetHTTPClient())
 	if err != nil {
 		return nil, err
 	}
 	migrationClient, err := kubemigratorclient.NewForConfigAndClient(recommendedRESTConfig, momInput.MutationTrackingClient.GetHTTPClient())
+	if err != nil {
+		return nil, err
+	}
+	apiextensionsClient, err := apiextensionsclient.NewForConfigAndClient(recommendedRESTConfig, momInput.MutationTrackingClient.GetHTTPClient())
 	if err != nil {
 		return nil, err
 	}
@@ -131,8 +145,10 @@ func CreateOperatorInputFromMOM(ctx context.Context, momInput libraryapplyconfig
 		operatorClient:               operatorClient,
 		routeClient:                  routeClient,
 		oauthClient:                  oauthClient,
+		authzClient:                  authzClient,
 		authenticationOperatorClient: authenticationOperatorClient,
 		apiregistrationv1Client:      apiregistrationv1Client,
+		apiextensionsClient:          apiextensionsClient,
 		migrationClient:              migrationClient,
 		eventRecorder:                eventRecorder,
 		informerFactories: []libraryapplyconfiguration.SimplifiedInformerFactory{
@@ -162,7 +178,15 @@ func CreateControllerInputFromControllerContext(ctx context.Context, controllerC
 	if err != nil {
 		return nil, err
 	}
+	authzClient, err := authzclient.NewForConfig(controllerContext.ProtoKubeConfig)
+	if err != nil {
+		return nil, err
+	}
 	apiregistrationv1Client, err := apiregistrationclient.NewForConfig(controllerContext.ProtoKubeConfig)
+	if err != nil {
+		return nil, err
+	}
+	apiextensionsClient, err := apiextensionsclient.NewForConfig(controllerContext.ProtoKubeConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -200,8 +224,10 @@ func CreateControllerInputFromControllerContext(ctx context.Context, controllerC
 		operatorClient:               operatorClient,
 		routeClient:                  routeClient,
 		oauthClient:                  oauthClient,
+		authzClient:                  authzClient,
 		authenticationOperatorClient: authenticationOperatorClient,
 		apiregistrationv1Client:      apiregistrationv1Client,
+		apiextensionsClient:          apiextensionsClient,
 		migrationClient:              migrationClient,
 		eventRecorder:                eventRecorder,
 		informerFactories: []libraryapplyconfiguration.SimplifiedInformerFactory{
@@ -216,6 +242,7 @@ type authenticationOperatorInformerFactories struct {
 	operatorInformer           operatorinformer.SharedInformerFactory
 	oauthInformers             oauthinformers.SharedInformerFactory
 	apiregistrationInformers   apiregistrationinformers.SharedInformerFactory
+	apiextensionsInformers     apiextensionsinformers.SharedInformerFactory
 	migrationInformer          migrationv1alpha1informer.SharedInformerFactory
 	// TODO remove
 	kubeInformers kubeinformers.SharedInformerFactory
@@ -241,6 +268,7 @@ func newInformerFactories(authOperatorInput *authenticationOperatorInput) authen
 		operatorInformer:         operatorinformer.NewSharedInformerFactory(authOperatorInput.operatorClient, 24*time.Hour),
 		oauthInformers:           oauthinformers.NewSharedInformerFactory(authOperatorInput.oauthClient, resync),
 		apiregistrationInformers: apiregistrationinformers.NewSharedInformerFactory(authOperatorInput.apiregistrationv1Client, 10*time.Minute),
+		apiextensionsInformers:   apiextensionsinformers.NewSharedInformerFactory(authOperatorInput.apiextensionsClient, resync),
 		migrationInformer:        migrationv1alpha1informer.NewSharedInformerFactory(authOperatorInput.migrationClient, time.Minute*30),
 		kubeInformers:            kubeinformers.NewSharedInformerFactory(authOperatorInput.kubeClient, resync),
 
@@ -258,6 +286,7 @@ func (a authenticationOperatorInformerFactories) simplifiedInformerFactories() [
 		libraryapplyconfiguration.GeneratedInformerFactoryAdapter(a.operatorConfigInformer),
 		libraryapplyconfiguration.GeneratedInformerFactoryAdapter(a.oauthInformers),
 		libraryapplyconfiguration.GeneratedInformerFactoryAdapter(a.apiregistrationInformers),
+		libraryapplyconfiguration.GeneratedInformerFactoryAdapter(a.apiextensionsInformers),
 		libraryapplyconfiguration.GeneratedInformerFactoryAdapter(a.migrationInformer),
 		libraryapplyconfiguration.GeneratedInformerFactoryAdapter(a.kubeInformers),
 		libraryapplyconfiguration.GeneratedInformerFactoryAdapter(a.namespacedOpenshiftAuthenticationRoutes),

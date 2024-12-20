@@ -707,6 +707,8 @@ func prepareExternalOIDC(
 		informerFactories.operatorConfigInformer,
 		authOperatorInput.authenticationOperatorClient,
 		authOperatorInput.kubeClient.CoreV1(),
+		authOperatorInput.authzClient,
+		informerFactories.apiextensionsInformers,
 		authOperatorInput.eventRecorder,
 	)
 
