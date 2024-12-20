@@ -13,6 +13,7 @@ import (
 	"time"
 
 	configv1 "github.com/openshift/api/config/v1"
+	authzclient "github.com/openshift/client-go/authorization/clientset/versioned"
 	configinformers "github.com/openshift/client-go/config/informers/externalversions"
 	configv1listers "github.com/openshift/client-go/config/listers/config/v1"
 	"github.com/openshift/library-go/pkg/controller/factory"
@@ -21,6 +22,8 @@ import (
 	"github.com/openshift/library-go/pkg/operator/v1helpers"
 	"golang.org/x/net/http/httpproxy"
 
+	apiextensionsinformer "k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions"
+	apiextensionslister "k8s.io/apiextensions-apiserver/pkg/client/listers/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,6 +49,9 @@ type externalOIDCController struct {
 	authLister      configv1listers.AuthenticationLister
 	configMapLister corev1listers.ConfigMapLister
 	configMaps      corev1client.ConfigMapsGetter
+
+	authzClient authzclient.Interface
+	crdLister   apiextensionslister.CustomResourceDefinitionLister
 }
 
 func NewExternalOIDCController(
@@ -53,6 +59,8 @@ func NewExternalOIDCController(
 	configInformer configinformers.SharedInformerFactory,
 	operatorClient v1helpers.OperatorClient,
 	configMaps corev1client.ConfigMapsGetter,
+	authzClient authzclient.Interface,
+	apiextensionsInformer apiextensionsinformer.SharedInformerFactory,
 	recorder events.Recorder,
 ) factory.Controller {
 
@@ -63,6 +71,9 @@ func NewExternalOIDCController(
 		authLister:      configInformer.Config().V1().Authentications().Lister(),
 		configMapLister: kubeInformersForNamespaces.ConfigMapLister(),
 		configMaps:      configMaps,
+
+		authzClient: authzClient,
+		crdLister:   apiextensionsInformer.Apiextensions().V1().CustomResourceDefinitions().Lister(),
 	}
 
 	return factory.New().WithInformers(
@@ -103,6 +114,12 @@ func (c *externalOIDCController) sync(ctx context.Context, syncCtx factory.SyncC
 		return nil
 	}
 
+	if fulfilled, msg, err := c.oidcPreconditionsFulfilled(ctx); err != nil {
+		return err
+	} else if !fulfilled {
+		return fmt.Errorf("OIDC preconditions not fulfilled: %s", msg)
+	}
+
 	authConfig, err := c.generateAuthConfig(*auth)
 	if err != nil {
 		return err
@@ -135,6 +152,28 @@ func (c *externalOIDCController) sync(ctx context.Context, syncCtx factory.SyncC
 	syncCtx.Recorder().Eventf(c.eventName, "Synced auth configmap %s/%s", managedNamespace, targetAuthConfigCMName)
 
 	return nil
+}
+
+func (c *externalOIDCController) oidcPreconditionsFulfilled(ctx context.Context) (bool, string, error) {
+	if _, err := c.crdLister.Get("rolebindingrestrictions.authorization.openshift.io"); errors.IsNotFound(err) {
+		return true, "", nil
+	} else if err != nil {
+		return false, "", err
+	}
+
+	rbrList, err := c.authzClient.AuthorizationV1().RoleBindingRestrictions("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, "", err
+	} else if len(rbrList.Items) == 0 {
+		return true, "", nil
+	}
+
+	rbrNames := make([]string, 0, len(rbrList.Items))
+	for _, rbr := range rbrList.Items {
+		rbrNames = append(rbrNames, fmt.Sprintf("%s/%s", rbr.Namespace, rbr.Name))
+	}
+
+	return false, fmt.Sprintf("API rolebindingrestrictions.authorization.openshift.io is not compatible with auth type 'OIDC', existing resources must be deleted (%s)", strings.Join(rbrNames, ",")), nil
 }
 
 // generateAuthConfig creates a structured JWT AuthenticationConfiguration for OIDC

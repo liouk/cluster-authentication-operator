@@ -21,10 +21,14 @@ import (
 	"testing"
 	"time"
 
+	authzv1 "github.com/openshift/api/authorization/v1"
 	configv1 "github.com/openshift/api/config/v1"
+	fakeauthz "github.com/openshift/client-go/authorization/clientset/versioned/fake"
 	configv1listers "github.com/openshift/client-go/config/listers/config/v1"
 	"github.com/openshift/library-go/pkg/controller/factory"
 	"github.com/openshift/library-go/pkg/operator/events"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiextensionslister "k8s.io/apiextensions-apiserver/pkg/client/listers/apiextensions/v1"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -217,6 +221,9 @@ func TestExternalOIDCController_sync(t *testing.T) {
 		cmApplyReaction      k8stesting.ReactionFunc
 		cmDeleteReaction     k8stesting.ReactionFunc
 
+		existingRBRs  []*authzv1.RoleBindingRestriction
+		rbrCRDMissing bool
+
 		expectedAuthConfigJSON string
 		expectEvents           bool
 		expectError            bool
@@ -255,7 +262,7 @@ func TestExternalOIDCController_sync(t *testing.T) {
 		},
 		{
 			name:             "auth type OIDC but config map lister fails",
-			configMapIndexer: cache.Indexer(&everFailingIndexer{}),
+			configMapIndexer: &everFailingIndexer{},
 			expectEvents:     false,
 			expectError:      true,
 		},
@@ -304,6 +311,39 @@ func TestExternalOIDCController_sync(t *testing.T) {
 			expectEvents: true,
 			expectError:  false,
 		},
+		{
+			name:                 "auth type OIDC apply config while rolebindingrestriction CRD missing",
+			caBundleConfigMap:    &baseCABundleConfigMap,
+			existingAuthConfigCM: authConfigCMWithIssuerURL(&baseAuthConfigCM, testServer.URL),
+			rbrCRDMissing:        true,
+			auth: authWithUpdates(baseAuthResource, []func(auth *configv1.Authentication){
+				func(auth *configv1.Authentication) {
+					auth.Spec.OIDCProviders[0].Issuer.URL = testServer.URL
+					auth.Spec.OIDCProviders[0].Issuer.Audiences = []configv1.TokenAudience{"my-test-aud", "yet-another-aud"}
+				},
+			}),
+			expectedAuthConfigJSON: func() string {
+				str := strings.ReplaceAll(baseAuthConfigJSON, "$URL", testServer.URL)
+				str = strings.ReplaceAll(str, "another-aud", "yet-another-aud")
+				return str
+			}(),
+			expectEvents: true,
+			expectError:  false,
+		},
+		{
+			name: "auth type OIDC rolebindingrestrictions exist",
+			auth: &baseAuthResource,
+			existingRBRs: []*authzv1.RoleBindingRestriction{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-rbr",
+						Namespace: "test-rbr-ns",
+					},
+				},
+			},
+			expectEvents: false,
+			expectError:  true,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			objects := []runtime.Object{}
@@ -339,10 +379,26 @@ func TestExternalOIDCController_sync(t *testing.T) {
 				cs.PrependReactor("delete", "configmaps", tt.cmDeleteReaction)
 			}
 
+			crdIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+			if !tt.rbrCRDMissing {
+				crdIndexer.Add(&apiextensionsv1.CustomResourceDefinition{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "rolebindingrestrictions.authorization.openshift.io",
+					},
+				})
+			}
+
+			rbrs := make([]runtime.Object, 0)
+			for _, rbr := range tt.existingRBRs {
+				rbrs = append(rbrs, rbr)
+			}
+
 			c := externalOIDCController{
 				configMaps:      cs.CoreV1(),
 				authLister:      configv1listers.NewAuthenticationLister(authIndexer),
 				configMapLister: corev1listers.NewConfigMapLister(tt.configMapIndexer),
+				authzClient:     fakeauthz.NewSimpleClientset(rbrs...),
+				crdLister:       apiextensionslister.NewCustomResourceDefinitionLister(crdIndexer),
 			}
 
 			eventRecorder := events.NewInMemoryRecorder("externaloidc-test")
