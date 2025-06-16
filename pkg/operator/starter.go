@@ -660,6 +660,7 @@ func prepareOauthAPIServerOperator(
 		authOperatorInput.kubeClient.CoreV1(),
 		authOperatorInput.configClient.ConfigV1().Authentications(),
 		authOperatorInput.authenticationOperatorClient,
+		authConfigChecker,
 		versionRecorder,
 		eventRecorder,
 	)
