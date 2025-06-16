@@ -368,6 +368,7 @@ func prepareOauthOperator(
 		authOperatorInput.kubeClient.CoreV1(),
 		informerFactories.kubeInformersForNamespaces,
 		informerFactories.operatorConfigInformer.Config().V1().Ingresses(),
+		authConfigChecker,
 		authOperatorInput.eventRecorder,
 	)
 
