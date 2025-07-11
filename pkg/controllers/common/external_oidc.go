@@ -17,22 +17,20 @@ import (
 )
 
 type AuthConfigChecker struct {
-	authentications        configv1informers.AuthenticationInformer
-	authLister             configv1listers.AuthenticationLister
-	kubeAPIServers         operatorv1informers.KubeAPIServerInformer
-	kasLister              operatorv1listers.KubeAPIServerLister
-	kasNamespaceConfigMaps corev1informers.ConfigMapInformer
-	kasConfigMapLister     corelistersv1.ConfigMapLister
+	authentications    configv1informers.AuthenticationInformer
+	authLister         configv1listers.AuthenticationLister
+	kubeAPIServers     operatorv1informers.KubeAPIServerInformer
+	kasLister          operatorv1listers.KubeAPIServerLister
+	kasConfigMapLister corelistersv1.ConfigMapLister
 }
 
 func NewAuthConfigChecker(authentications configv1informers.AuthenticationInformer, kubeapiservers operatorv1informers.KubeAPIServerInformer, configmaps corev1informers.ConfigMapInformer) AuthConfigChecker {
 	return AuthConfigChecker{
-		authentications:        authentications,
-		kubeAPIServers:         kubeapiservers,
-		kasNamespaceConfigMaps: configmaps,
-		authLister:             authentications.Lister(),
-		kasLister:              kubeapiservers.Lister(),
-		kasConfigMapLister:     configmaps.Lister(),
+		authentications:    authentications,
+		kubeAPIServers:     kubeapiservers,
+		authLister:         authentications.Lister(),
+		kasLister:          kubeapiservers.Lister(),
+		kasConfigMapLister: configmaps.Lister(),
 	}
 }
 
@@ -46,10 +44,6 @@ func (c *AuthConfigChecker) Authentications() configv1informers.AuthenticationIn
 
 func (c *AuthConfigChecker) KubeAPIServers() operatorv1informers.KubeAPIServerInformer {
 	return c.kubeAPIServers
-}
-
-func (c *AuthConfigChecker) KubeAPIServerNamespaceConfigMaps() corev1informers.ConfigMapInformer {
-	return c.kasNamespaceConfigMaps
 }
 
 // OIDCAvailable checks the kubeapiservers/cluster resource for KAS pod
