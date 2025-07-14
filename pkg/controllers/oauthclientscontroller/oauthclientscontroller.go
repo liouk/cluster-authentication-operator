@@ -19,7 +19,9 @@ import (
 	oauthv1 "github.com/openshift/api/oauth/v1"
 	configinformers "github.com/openshift/client-go/config/informers/externalversions"
 	configv1listers "github.com/openshift/client-go/config/listers/config/v1"
-	oauthclient "github.com/openshift/client-go/oauth/clientset/versioned/typed/oauth/v1"
+	oauthclient "github.com/openshift/client-go/oauth/clientset/versioned"
+	oauthclientv1 "github.com/openshift/client-go/oauth/clientset/versioned/typed/oauth/v1"
+	oauthinformers "github.com/openshift/client-go/oauth/informers/externalversions"
 	oauthv1listers "github.com/openshift/client-go/oauth/listers/oauth/v1"
 	routeinformers "github.com/openshift/client-go/route/informers/externalversions"
 	routev1listers "github.com/openshift/client-go/route/listers/route/v1"
@@ -32,11 +34,11 @@ import (
 	"github.com/openshift/cluster-authentication-operator/pkg/controllers/common"
 	"github.com/openshift/cluster-authentication-operator/pkg/controllers/customroute"
 	"github.com/openshift/cluster-authentication-operator/pkg/controllers/oauthclientsswitchedinformer"
+	"github.com/openshift/cluster-authentication-operator/pkg/controllers/switchedcontroller"
 )
 
-type oauthsClientsController struct {
-	oauthClientClient oauthclient.OAuthClientInterface
-
+type oauthClientsController struct {
+	oauthClientClient   oauthclientv1.OAuthClientInterface
 	oauthClientInformer cache.SharedIndexInformer
 	oauthClientLister   oauthv1listers.OAuthClientLister
 	routeLister         routev1listers.RouteLister
@@ -47,15 +49,15 @@ type oauthsClientsController struct {
 
 func NewOAuthClientsController(
 	operatorClient v1helpers.OperatorClient,
-	oauthsClientClient oauthclient.OAuthClientInterface,
+	oauthClientClient oauthclientv1.OAuthClientInterface,
 	oauthClientsSwitchedInformer *oauthclientsswitchedinformer.InformerWithSwitch,
 	routeInformers routeinformers.SharedInformerFactory,
 	operatorConfigInformers configinformers.SharedInformerFactory,
 	authConfigChecker common.AuthConfigChecker,
 	eventRecorder events.Recorder,
 ) factory.Controller {
-	c := &oauthsClientsController{
-		oauthClientClient: oauthsClientClient,
+	c := &oauthClientsController{
+		oauthClientClient: oauthClientClient,
 
 		oauthClientInformer: oauthClientsSwitchedInformer.Informer(),
 		oauthClientLister:   oauthv1listers.NewOAuthClientLister(oauthClientsSwitchedInformer.Informer().GetIndexer()),
@@ -84,7 +86,63 @@ func NewOAuthClientsController(
 		ToController("OAuthClientsController", eventRecorder.WithComponentSuffix("oauth-clients-controller"))
 }
 
-func (c *oauthsClientsController) sync(ctx context.Context, syncCtx factory.SyncContext) error {
+func NewOAuthClientsSwitchedController(
+	operatorClient v1helpers.OperatorClient,
+	oauthClientsClient oauthclient.Interface,
+	routeInformers routeinformers.SharedInformerFactory,
+	operatorConfigInformers configinformers.SharedInformerFactory,
+	authConfigChecker common.AuthConfigChecker,
+	eventRecorder events.Recorder,
+) factory.Controller {
+
+	controllerFactoryFn := func(ctx context.Context) *factory.Factory {
+		oauthClientsInformer := oauthinformers.NewSharedInformerFactory(oauthClientsClient, 1*time.Minute).Oauth().V1().OAuthClients()
+		informer := oauthClientsInformer.Informer()
+		go informer.Run(ctx.Done())
+
+		c := &oauthClientsController{
+			oauthClientClient: oauthClientsClient.OauthV1().OAuthClients(),
+
+			oauthClientLister: oauthClientsInformer.Lister(),
+			routeLister:       routeInformers.Route().V1().Routes().Lister(),
+			ingressLister:     operatorConfigInformers.Config().V1().Ingresses().Lister(),
+			authConfigChecker: authConfigChecker,
+		}
+
+		return factory.New().
+			WithSync(c.sync).
+			WithSyncDegradedOnError(operatorClient).
+			WithFilteredEventsInformers(
+				factory.NamesFilter("openshift-browser-client", "openshift-challenging-client", "openshift-cli-client"),
+				informer,
+			).
+			WithFilteredEventsInformers(
+				factory.NamesFilter("oauth-openshift"),
+				routeInformers.Route().V1().Routes().Informer(),
+			).
+			WithInformers(
+				operatorConfigInformers.Config().V1().Ingresses().Informer(),
+				authConfigChecker.Authentications().Informer(),
+				authConfigChecker.KubeAPIServers().Informer(),
+			).
+			ResyncEvery(wait.Jitter(time.Minute, 1.0))
+	}
+
+	return switchedcontroller.NewControllerWithSwitch(
+		operatorClient,
+		"OAuthClientsController",
+		controllerFactoryFn,
+		authConfigChecker.OIDCAvailable,
+		[]factory.Informer{
+			authConfigChecker.Authentications().Informer(),
+			authConfigChecker.KubeAPIServers().Informer(),
+		},
+		wait.Jitter(time.Minute, 1.0),
+		eventRecorder,
+	)
+}
+
+func (c *oauthClientsController) sync(ctx context.Context, syncCtx factory.SyncContext) error {
 	if oidcAvailable, err := c.authConfigChecker.OIDCAvailable(); err != nil {
 		return err
 	} else if oidcAvailable {
@@ -116,7 +174,7 @@ func (c *oauthsClientsController) sync(ctx context.Context, syncCtx factory.Sync
 	return c.ensureBootstrappedOAuthClients(ctx, "https://"+routeHost)
 }
 
-func (c *oauthsClientsController) getIngressConfig() (*configv1.Ingress, error) {
+func (c *oauthClientsController) getIngressConfig() (*configv1.Ingress, error) {
 	ingress, err := c.ingressLister.Get("cluster")
 	if err != nil {
 		return nil, fmt.Errorf("unable to get cluster ingress config: %v", err)
@@ -127,7 +185,7 @@ func (c *oauthsClientsController) getIngressConfig() (*configv1.Ingress, error) 
 	return ingress, nil
 }
 
-func (c *oauthsClientsController) getCanonicalRouteHost(expectedHost string) (string, error) {
+func (c *oauthClientsController) getCanonicalRouteHost(expectedHost string) (string, error) {
 	route, err := c.routeLister.Routes("openshift-authentication").Get("oauth-openshift")
 	if err != nil {
 		return "", err
@@ -140,7 +198,7 @@ func (c *oauthsClientsController) getCanonicalRouteHost(expectedHost string) (st
 	return routeHost.Host, nil
 }
 
-func (c *oauthsClientsController) ensureBootstrappedOAuthClients(ctx context.Context, masterPublicURL string) error {
+func (c *oauthClientsController) ensureBootstrappedOAuthClients(ctx context.Context, masterPublicURL string) error {
 	for _, client := range []oauthv1.OAuthClient{
 		{
 			ObjectMeta:            metav1.ObjectMeta{Name: "openshift-browser-client"},
@@ -170,7 +228,7 @@ func (c *oauthsClientsController) ensureBootstrappedOAuthClients(ctx context.Con
 	return nil
 }
 
-func (c *oauthsClientsController) ensureBootstrappedOAuthClientsMissing(ctx context.Context) error {
+func (c *oauthClientsController) ensureBootstrappedOAuthClientsMissing(ctx context.Context) error {
 	for _, clientName := range []string{
 		"openshift-browser-client",
 		"openshift-challenging-client",
@@ -203,7 +261,7 @@ func randomBits(bits uint) []byte {
 	return b
 }
 
-func (c *oauthsClientsController) ensureOAuthClient(ctx context.Context, client oauthv1.OAuthClient) error {
+func (c *oauthClientsController) ensureOAuthClient(ctx context.Context, client oauthv1.OAuthClient) error {
 	_, err := c.oauthClientLister.Get(client.Name)
 	if apierrors.IsNotFound(err) {
 		_, err = c.oauthClientClient.Create(ctx, &client, metav1.CreateOptions{})

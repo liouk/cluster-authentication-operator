@@ -113,7 +113,7 @@ func newRouteLister(t *testing.T, routes ...*routev1.Route) routev1listers.Route
 	return routev1listers.NewRouteLister(routeIndexer)
 }
 
-func newTestOAuthsClientsController(t *testing.T) (*oauthsClientsController, cache.Indexer) {
+func newTestOAuthsClientsController(t *testing.T) (*oauthClientsController, cache.Indexer) {
 	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
 	oauthClientset := fakeoauthclient.NewSimpleClientset()
 	switchedInformer := oauthclientsswitchedinformer.NewSwitchedInformer(
@@ -136,7 +136,7 @@ func newTestOAuthsClientsController(t *testing.T) (*oauthsClientsController, cac
 		},
 	})
 
-	return &oauthsClientsController{
+	return &oauthClientsController{
 		ingressLister:       newIngressLister(t, defaultIngress),
 		oauthClientClient:   oauthClientset.OauthV1().OAuthClients(),
 		oauthClientInformer: switchedInformer.Informer(),
