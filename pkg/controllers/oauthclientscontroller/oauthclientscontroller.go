@@ -134,7 +134,13 @@ func NewOAuthClientsSwitchedController(
 		operatorClient,
 		"OAuthClientsController",
 		controllerFactoryFn,
-		authConfigChecker.OIDCAvailable,
+		func() (bool, error) {
+			oidcAvailable, err := authConfigChecker.OIDCAvailable()
+			if err != nil {
+				return false, err
+			}
+			return !oidcAvailable, nil
+		},
 		[]factory.Informer{
 			authConfigChecker.Authentications().Informer(),
 			authConfigChecker.KubeAPIServers().Informer(),
