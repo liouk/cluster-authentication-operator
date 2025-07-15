@@ -139,6 +139,41 @@ func NewOAuthServerWorkloadController(
 	)
 }
 
+func (c *oauthServerDeploymentSyncer) IsDeleted(ctx context.Context) (bool, string, string, error) {
+	if oidcAvailable, err := c.authConfigChecker.OIDCAvailable(); err != nil {
+		return false, "", "", err
+	} else if !oidcAvailable {
+		return false, "", "", nil
+	}
+
+	operatorSpec, _, _, err := c.operatorClient.GetOperatorState()
+	if err != nil {
+		return false, "", "", err
+	}
+
+	proxyConfig, err := c.getProxyConfig()
+	if err != nil {
+		return false, "", "", err
+	}
+
+	resourceVersions := []string{}
+	if len(proxyConfig.Name) > 0 {
+		resourceVersions = append(resourceVersions, "proxy:"+proxyConfig.Name+":"+proxyConfig.ResourceVersion)
+	}
+
+	deployment, err := getOAuthServerDeployment(operatorSpec, proxyConfig, c.bootstrapUserChangeRollOut, resourceVersions...)
+	if err != nil {
+		return false, "", "", nil
+	}
+
+	// TODO use a lister first
+	if err := c.deployments.Deployments(deployment.Namespace).Delete(ctx, deployment.Name, metav1.DeleteOptions{}); err != nil && !errors.IsNotFound(err) {
+		return false, "", "", err
+	}
+
+	return true, deployment.Name, deployment.Namespace, nil
+}
+
 func (c *oauthServerDeploymentSyncer) PreconditionFulfilled(_ context.Context) (bool, error) {
 	if oidcAvailable, err := c.authConfigChecker.OIDCAvailable(); err != nil {
 		return false, err

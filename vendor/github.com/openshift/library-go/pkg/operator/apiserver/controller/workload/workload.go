@@ -61,6 +61,8 @@ type Delegate interface {
 	// operator will be degraded, not available and not progressing
 	// returned errors (if any) will be added to the Message field
 	PreconditionFulfilled(ctx context.Context) (bool, error)
+
+	IsDeleted(ctx context.Context) (bool, string, string, error)
 }
 
 // Controller is a generic workload controller that deals with Deployment resource.
@@ -145,6 +147,20 @@ func (c *Controller) sync(ctx context.Context, controllerContext factory.SyncCon
 
 	if run, err := c.shouldSync(ctx, operatorSpec, controllerContext.Recorder()); !run {
 		return err
+	}
+
+	if deleted, name, _, err := c.delegate.IsDeleted(ctx); err != nil {
+		return err
+	} else if deleted {
+		// Server-Side-Applying an empty operator status for the specific field manager will effectively
+		// remove its conditions and generations, because the respective API fields have map as the list type
+		// and field managers can be list element-specific
+		if err := c.operatorClient.ApplyOperatorStatus(ctx, c.controllerInstanceName, applyoperatorv1.OperatorStatus()); err != nil {
+			return err
+		}
+
+		c.setVersion(name, "")
+		return nil
 	}
 
 	if fulfilled, err := c.delegate.PreconditionFulfilled(ctx); err != nil {

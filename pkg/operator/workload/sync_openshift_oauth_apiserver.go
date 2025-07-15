@@ -121,6 +121,27 @@ func (c *OAuthAPIServerWorkload) preconditionFulfilledInternal(operatorSpec *ope
 	return true, nil
 }
 
+func (c *OAuthAPIServerWorkload) IsDeleted(ctx context.Context) (bool, string, string, error) {
+	if oidcAvailable, err := c.authConfigChecker.OIDCAvailable(); err != nil {
+		return false, "", "", err
+	} else if !oidcAvailable {
+		return false, "", "", nil
+	}
+
+	tmpl, err := bindata.Asset("oauth-apiserver/deploy.yaml")
+	if err != nil {
+		return false, "", "", err
+	}
+	deployment := resourceread.ReadDeploymentV1OrDie(tmpl)
+
+	// TODO use a lister first
+	if err := c.kubeClient.AppsV1().Deployments(deployment.Namespace).Delete(ctx, deployment.Name, metav1.DeleteOptions{}); err != nil && !errors.IsNotFound(err) {
+		return false, "", "", err
+	}
+
+	return true, deployment.Name, deployment.Namespace, nil
+}
+
 // Sync essentially manages OAuthAPI server.
 func (c *OAuthAPIServerWorkload) Sync(ctx context.Context, syncCtx factory.SyncContext) (*appsv1.Deployment, bool, bool, string, string, []error) {
 	errs := []error{}
