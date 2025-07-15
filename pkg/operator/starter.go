@@ -465,7 +465,6 @@ func prepareOauthAPIServerOperator(
 		return nil, nil, err
 	}
 	var statusControllerOptions []func(*status.StatusSyncer) *status.StatusSyncer
-	statusControllerOptions = append(statusControllerOptions, func(ss *status.StatusSyncer) *status.StatusSyncer { return ss.WithEmptyVersionRemoval() })
 	if infra == nil || infra.Status.ControlPlaneTopology != configv1.SingleReplicaTopologyMode {
 		statusControllerOptions = append(statusControllerOptions, apiservercontrollerset.WithStatusControllerPdbCompatibleHighInertia("(APIServer|OAuthServer)"))
 	}
