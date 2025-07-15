@@ -35,14 +35,15 @@ func (v *versionGetter) SetVersion(operandName, version string) {
 	defer v.lock.Unlock()
 
 	v.versions[operandName] = version
+	v.notifyChannels()
+}
 
-	for i := range v.notificationChannels {
-		ch := v.notificationChannels[i]
-		// don't let a slow consumer block the rest
-		go func() {
-			ch <- struct{}{}
-		}()
-	}
+func (v *versionGetter) UnsetVersion(operandName string) {
+	v.lock.Lock()
+	defer v.lock.Unlock()
+
+	delete(v.versions, operandName)
+	v.notifyChannels()
 }
 
 func (v *versionGetter) GetVersions() map[string]string {
@@ -63,6 +64,16 @@ func (v *versionGetter) VersionChangedChannel() <-chan struct{} {
 	channel := make(chan struct{}, 50)
 	v.notificationChannels = append(v.notificationChannels, channel)
 	return channel
+}
+
+func (v *versionGetter) notifyChannels() {
+	for i := range v.notificationChannels {
+		ch := v.notificationChannels[i]
+		// don't let a slow consumer block the rest
+		go func() {
+			ch <- struct{}{}
+		}()
+	}
 }
 
 func ImageForOperandFromEnv() string {

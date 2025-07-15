@@ -2,11 +2,11 @@ package status
 
 import (
 	"context"
+	"k8s.io/utils/clock"
 	"strings"
 	"time"
 
 	"k8s.io/klog/v2"
-	"k8s.io/utils/clock"
 
 	configv1 "github.com/openshift/api/config/v1"
 	operatorv1 "github.com/openshift/api/operator/v1"
@@ -29,6 +29,8 @@ import (
 type VersionGetter interface {
 	// SetVersion is a way to set the version for an operand.  It must be thread-safe
 	SetVersion(operandName, version string)
+	// UnsetVersion removes a version for an operand.  It must be thread-safe
+	UnsetVersion(operandName string)
 	// GetVersion is way to get the versions for all operands.  It must be thread-safe and return an object that doesn't mutate
 	GetVersions() map[string]string
 	// VersionChangedChannel is a channel that will get an item whenever SetVersion has been called
@@ -53,7 +55,6 @@ type StatusSyncer struct {
 	degradedInertia   Inertia
 
 	removeUnusedVersions bool
-	removeEmptyVersions  bool
 }
 
 var _ factory.Controller = &StatusSyncer{}
@@ -128,14 +129,6 @@ func (c *StatusSyncer) WithDegradedInertia(inertia Inertia) *StatusSyncer {
 func (c *StatusSyncer) WithVersionRemoval() *StatusSyncer {
 	output := *c
 	output.removeUnusedVersions = true
-	return &output
-}
-
-// WithEmptyVersionRemoval returns a copy of the StatusSyncer that will
-// remove versions that are an empty string in VersionGetter from the status.
-func (c *StatusSyncer) WithEmptyVersionRemoval() *StatusSyncer {
-	output := *c
-	output.removeEmptyVersions = true
 	return &output
 }
 
@@ -266,18 +259,6 @@ func (c *StatusSyncer) syncStatusVersions(clusterOperatorObj *configv1.ClusterOp
 			// having this message will give us a marker in events when the operator updated compared to when the operand is updated
 			syncCtx.Recorder().Eventf("OperatorVersionChanged", "clusteroperator/%s version %q changed from %q to %q", c.clusterOperatorName, operand, previousVersion, version)
 		}
-	}
-
-	// useful in case a workload has been deleted and we do not want to keep an empty version string in the status
-	if c.removeEmptyVersions {
-		filteredVersions := make([]configv1.OperandVersion, 0, len(clusterOperatorObj.Status.Versions))
-		for _, version := range clusterOperatorObj.Status.Versions {
-			if len(version.Version) > 0 {
-				filteredVersions = append(filteredVersions, version)
-			}
-		}
-
-		clusterOperatorObj.Status.Versions = filteredVersions
 	}
 
 	if !c.removeUnusedVersions {
