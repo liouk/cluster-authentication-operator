@@ -69,9 +69,11 @@ func (c *ControllerWithSwitch) runDelegate(ctx context.Context, syncCtx factory.
 	defer c.mutex.Unlock()
 
 	if c.delegateController == nil {
+		klog.Infof("[liouk] will create a new controller instance")
 		c.delegateController = c.delegateFactoryFn(ctx).ToController(c.delegateName, syncCtx.Recorder())
 	}
 	go c.delegateController.Run(ctx, 1)
+	klog.Infof("[liouk] controller go!")
 }
 
 func (c *ControllerWithSwitch) stopDelegate() {
@@ -79,9 +81,11 @@ func (c *ControllerWithSwitch) stopDelegate() {
 	defer c.mutex.Unlock()
 
 	if c.switchContextCancel != nil {
+		klog.Infof("[liouk] cancelling context")
 		c.switchContextCancel()
 	}
 
+	klog.Infof("[liouk] resetting vars")
 	c.switchContext = nil
 	c.delegateController = nil
 }
@@ -101,19 +105,24 @@ func (c *ControllerWithSwitch) sync(ctx context.Context, syncCtx factory.SyncCon
 	if err != nil {
 		return fmt.Errorf("could not determine switch condition: %v", err)
 	}
+	klog.Infof("[liouk] switchCondition: %t", switchOn)
 
 	switch {
 	case !switchOn && c.switchContext == nil:
 		// we haven't been asked to start yet
+		klog.Infof("[liouk] not asked to start yet")
 
 	case switchOn && c.switchContext == nil:
+		klog.Infof("[liouk] must start")
 		c.switchContext, c.switchContextCancel = context.WithCancel(ctx)
 		c.runDelegate(c.switchContext, syncCtx)
 
 	case switchOn && c.switchContext != nil && c.switchContext.Err() == nil:
 		// context alive, delegate running
+		klog.Infof("[liouk] context alive, delegate running")
 
 	case !switchOn && c.switchContext != nil && c.switchContext.Err() == nil:
+		klog.Infof("[liouk] must stop")
 		c.stopDelegate()
 
 	default:

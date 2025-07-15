@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/klog/v2"
 
 	configv1 "github.com/openshift/api/config/v1"
 	oauthv1 "github.com/openshift/api/oauth/v1"
@@ -99,6 +100,7 @@ func NewOAuthClientsSwitchedController(
 		oauthClientsInformer := oauthinformers.NewSharedInformerFactory(oauthClientsClient, 1*time.Minute).Oauth().V1().OAuthClients()
 		informer := oauthClientsInformer.Informer()
 		go informer.Run(ctx.Done())
+		klog.Infof("[liouk] informer go!")
 
 		c := &oauthClientsController{
 			oauthClientClient: oauthClientsClient.OauthV1().OAuthClients(),
