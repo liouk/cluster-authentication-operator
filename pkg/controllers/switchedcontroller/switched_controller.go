@@ -105,7 +105,7 @@ func (c *ControllerWithSwitch) sync(ctx context.Context, syncCtx factory.SyncCon
 	if err != nil {
 		return fmt.Errorf("could not determine switch condition: %v", err)
 	}
-	klog.Infof("[liouk] switchCondition: %t", switchOn)
+	// klog.Infof("[liouk] switchCondition: %t", switchOn)
 
 	switch {
 	case !switchOn && c.switchContext == nil:
@@ -119,7 +119,7 @@ func (c *ControllerWithSwitch) sync(ctx context.Context, syncCtx factory.SyncCon
 
 	case switchOn && c.switchContext != nil && c.switchContext.Err() == nil:
 		// context alive, delegate running
-		klog.Infof("[liouk] context alive, delegate running")
+		// klog.Infof("[liouk] context alive, delegate running")
 
 	case !switchOn && c.switchContext != nil && c.switchContext.Err() == nil:
 		klog.Infof("[liouk] must stop")
