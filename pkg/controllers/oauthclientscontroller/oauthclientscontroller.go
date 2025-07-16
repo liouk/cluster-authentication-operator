@@ -127,6 +127,7 @@ func NewOAuthClientsSwitchedController(
 				operatorConfigInformers.Config().V1().Ingresses().Informer(),
 				authConfigChecker.Authentications().Informer(),
 				authConfigChecker.KubeAPIServers().Informer(),
+				authConfigChecker.KubeAPIServerConfigMaps().Informer(),
 			).
 			ResyncEvery(wait.Jitter(time.Minute, 1.0))
 	}
