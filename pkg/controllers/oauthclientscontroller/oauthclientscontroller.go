@@ -105,10 +105,11 @@ func NewOAuthClientsSwitchedController(
 		c := &oauthClientsController{
 			oauthClientClient: oauthClientsClient.OauthV1().OAuthClients(),
 
-			oauthClientLister: oauthClientsInformer.Lister(),
-			routeLister:       routeInformers.Route().V1().Routes().Lister(),
-			ingressLister:     operatorConfigInformers.Config().V1().Ingresses().Lister(),
-			authConfigChecker: authConfigChecker,
+			oauthClientInformer: informer,
+			oauthClientLister:   oauthClientsInformer.Lister(),
+			routeLister:         routeInformers.Route().V1().Routes().Lister(),
+			ingressLister:       operatorConfigInformers.Config().V1().Ingresses().Lister(),
+			authConfigChecker:   authConfigChecker,
 		}
 
 		return factory.New().
