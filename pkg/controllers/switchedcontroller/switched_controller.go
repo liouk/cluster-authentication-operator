@@ -101,7 +101,9 @@ func (c *ControllerWithSwitch) sync(ctx context.Context, syncCtx factory.SyncCon
 		return nil
 	}
 
+	klog.Infof("[liouk] --------------- checking condition")
 	switchOn, err := c.switchConditionFn()
+	klog.Infof("[liouk] --------------- check end")
 	if err != nil {
 		return fmt.Errorf("could not determine switch condition: %v", err)
 	}
@@ -110,7 +112,7 @@ func (c *ControllerWithSwitch) sync(ctx context.Context, syncCtx factory.SyncCon
 	switch {
 	case !switchOn && c.switchContext == nil:
 		// we haven't been asked to start yet
-		klog.Infof("[liouk] not asked to start yet")
+		// klog.Infof("[liouk] not asked to start yet")
 
 	case switchOn && c.switchContext == nil:
 		klog.Infof("[liouk] must start")

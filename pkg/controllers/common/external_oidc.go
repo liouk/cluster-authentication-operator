@@ -10,6 +10,7 @@ import (
 	operatorv1informers "github.com/openshift/client-go/operator/informers/externalversions/operator/v1"
 	operatorv1listers "github.com/openshift/client-go/operator/listers/operator/v1"
 	corev1informers "k8s.io/client-go/informers/core/v1"
+	"k8s.io/klog/v2"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -52,13 +53,16 @@ func (c *AuthConfigChecker) KubeAPIServers() operatorv1informers.KubeAPIServerIn
 // arg that enables usage of the structured auth-config. It returns false otherwise.
 func (c *AuthConfigChecker) OIDCAvailable() (bool, error) {
 	if auth, err := c.authLister.Get("cluster"); err != nil {
+		klog.Infof("[liouk] false1, err = %v", err)
 		return false, err
 	} else if auth.Spec.Type != configv1.AuthenticationTypeOIDC {
+		klog.Infof("[liouk] false2, nil")
 		return false, nil
 	}
 
 	kas, err := c.kasLister.Get("cluster")
 	if err != nil {
+		klog.Infof("[liouk] false3, err = %v", err)
 		return false, err
 	}
 
@@ -68,6 +72,7 @@ func (c *AuthConfigChecker) OIDCAvailable() (bool, error) {
 	}
 
 	if observedRevisions.Len() == 0 {
+		klog.Infof("[liouk] false4, nil")
 		return false, nil
 	}
 
@@ -75,14 +80,17 @@ func (c *AuthConfigChecker) OIDCAvailable() (bool, error) {
 		// ensure every observed revision includes an auth-config revisioned configmap
 		_, err := c.kasConfigMapLister.ConfigMaps("openshift-kube-apiserver").Get(fmt.Sprintf("auth-config-%d", revision))
 		if errors.IsNotFound(err) {
+			klog.Infof("[liouk] false5, nil")
 			return false, nil
 		} else if err != nil {
+			klog.Infof("[liouk] false6, err = %v", err)
 			return false, err
 		}
 
 		// every observed revision includes a copy of the KAS config configmap
 		cm, err := c.kasConfigMapLister.ConfigMaps("openshift-kube-apiserver").Get(fmt.Sprintf("config-%d", revision))
 		if err != nil {
+			klog.Infof("[liouk] false7, err = %v", err)
 			return false, err
 		}
 
@@ -91,6 +99,7 @@ func (c *AuthConfigChecker) OIDCAvailable() (bool, error) {
 		if !strings.Contains(cm.Data["config.yaml"], `"oauthMetadataFile":""`) ||
 			strings.Contains(cm.Data["config.yaml"], `"authentication-token-webhook-config-file":`) ||
 			!strings.Contains(cm.Data["config.yaml"], `"authentication-config":["/etc/kubernetes/static-pod-resources/configmaps/auth-config/auth-config.json"]`) {
+			klog.Infof("[liouk] false8, nil")
 			return false, nil
 		}
 	}
