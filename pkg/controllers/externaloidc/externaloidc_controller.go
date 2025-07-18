@@ -15,6 +15,8 @@ import (
 
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/api/features"
+	authzv1informers "github.com/openshift/client-go/authorization/informers/externalversions/authorization/v1"
+	authzv1listers "github.com/openshift/client-go/authorization/listers/authorization/v1"
 	configinformers "github.com/openshift/client-go/config/informers/externalversions"
 	configv1listers "github.com/openshift/client-go/config/listers/config/v1"
 	"github.com/openshift/library-go/pkg/controller/factory"
@@ -49,6 +51,7 @@ type externalOIDCController struct {
 	name            string
 	eventName       string
 	authLister      configv1listers.AuthenticationLister
+	rbrLister       authzv1listers.RoleBindingRestrictionLister
 	configMapLister corev1listers.ConfigMapLister
 	configMaps      corev1client.ConfigMapsGetter
 	featureGates    featuregates.FeatureGate
@@ -59,6 +62,7 @@ func NewExternalOIDCController(
 	configInformer configinformers.SharedInformerFactory,
 	operatorClient v1helpers.OperatorClient,
 	configMaps corev1client.ConfigMapsGetter,
+	rbrInformer authzv1informers.RoleBindingRestrictionInformer,
 	recorder events.Recorder,
 	featureGates featuregates.FeatureGate,
 ) factory.Controller {
@@ -67,6 +71,7 @@ func NewExternalOIDCController(
 		eventName: "external-oidc-controller",
 
 		authLister:      configInformer.Config().V1().Authentications().Lister(),
+		rbrLister:       rbrInformer.Lister(),
 		configMapLister: kubeInformersForNamespaces.ConfigMapLister(),
 		configMaps:      configMaps,
 		featureGates:    featureGates,
@@ -77,6 +82,7 @@ func NewExternalOIDCController(
 		kubeInformersForNamespaces.InformersFor(configNamespace).Core().V1().ConfigMaps().Informer(),
 		// track auth resource
 		configInformer.Config().V1().Authentications().Informer(),
+		rbrInformer.Informer(),
 	).WithFilteredEventsInformers(
 		// track openshift-config-managed/auth-config cm in case it gets changed externally
 		factory.NamesFilter(targetAuthConfigCMName),

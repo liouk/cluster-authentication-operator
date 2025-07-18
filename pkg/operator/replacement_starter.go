@@ -21,6 +21,8 @@ import (
 	ocpconfigv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/api/features"
 	operatorv1 "github.com/openshift/api/operator/v1"
+	authzclient "github.com/openshift/client-go/authorization/clientset/versioned"
+	authzinformer "github.com/openshift/client-go/authorization/informers/externalversions"
 	configclient "github.com/openshift/client-go/config/clientset/versioned"
 	configinformer "github.com/openshift/client-go/config/informers/externalversions"
 	oauthclient "github.com/openshift/client-go/oauth/clientset/versioned"
@@ -55,6 +57,7 @@ type authenticationOperatorInput struct {
 	authenticationOperatorClient v1helpers.OperatorClient
 	apiregistrationv1Client      apiregistrationclient.Interface
 	migrationClient              kubemigratorclient.Interface
+	authzClient                  authzclient.Interface
 	apiextensionClient           apiextensionsclient.Interface
 	eventRecorder                events.Recorder
 	clock                        clock.PassiveClock
@@ -91,6 +94,10 @@ func CreateOperatorInputFromMOM(ctx context.Context, momInput libraryapplyconfig
 		return nil, err
 	}
 	migrationClient, err := kubemigratorclient.NewForConfigAndClient(manifestclient.RecommendedRESTConfig(), momInput.MutationTrackingClient.GetHTTPClient())
+	if err != nil {
+		return nil, err
+	}
+	authzClient, err := authzclient.NewForConfigAndClient(manifestclient.RecommendedRESTConfig(), momInput.MutationTrackingClient.GetHTTPClient())
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +147,7 @@ func CreateOperatorInputFromMOM(ctx context.Context, momInput libraryapplyconfig
 		authenticationOperatorClient: authenticationOperatorClient,
 		apiregistrationv1Client:      apiregistrationv1Client,
 		migrationClient:              migrationClient,
+		authzClient:                  authzClient,
 		apiextensionClient:           apiextensionClient,
 		eventRecorder:                eventRecorder,
 		clock:                        momInput.Clock,
@@ -176,6 +184,10 @@ func CreateControllerInputFromControllerContext(ctx context.Context, controllerC
 		return nil, err
 	}
 	migrationClient, err := kubemigratorclient.NewForConfig(controllerContext.KubeConfig)
+	if err != nil {
+		return nil, err
+	}
+	authzClient, err := authzclient.NewForConfig(controllerContext.KubeConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +229,7 @@ func CreateControllerInputFromControllerContext(ctx context.Context, controllerC
 		authenticationOperatorClient: authenticationOperatorClient,
 		apiregistrationv1Client:      apiregistrationv1Client,
 		migrationClient:              migrationClient,
+		authzClient:                  authzClient,
 		apiextensionClient:           apiextensionsClient,
 		eventRecorder:                eventRecorder,
 		clock:                        controllerContext.Clock,
@@ -233,6 +246,7 @@ type authenticationOperatorInformerFactories struct {
 	operatorInformer           operatorinformer.SharedInformerFactory
 	apiregistrationInformers   apiregistrationinformers.SharedInformerFactory
 	migrationInformer          migrationv1alpha1informer.SharedInformerFactory
+	authzInformers             authzinformer.SharedInformerFactory
 	// TODO remove
 	kubeInformers kubeinformers.SharedInformerFactory
 
@@ -258,6 +272,7 @@ func newInformerFactories(authOperatorInput *authenticationOperatorInput) authen
 		operatorInformer:         operatorinformer.NewSharedInformerFactory(authOperatorInput.operatorClient, 24*time.Hour),
 		apiregistrationInformers: apiregistrationinformers.NewSharedInformerFactory(authOperatorInput.apiregistrationv1Client, 10*time.Minute),
 		migrationInformer:        migrationv1alpha1informer.NewSharedInformerFactory(authOperatorInput.migrationClient, time.Minute*30),
+		authzInformers:           authzinformer.NewSharedInformerFactory(authOperatorInput.authzClient, 24*time.Hour),
 		kubeInformers:            kubeinformers.NewSharedInformerFactory(authOperatorInput.kubeClient, resync),
 
 		namespacedOpenshiftAuthenticationRoutes: routeinformer.NewSharedInformerFactoryWithOptions(authOperatorInput.routeClient, resync,

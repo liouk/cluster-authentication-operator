@@ -14,6 +14,7 @@ import (
 	"github.com/openshift/api/features"
 	operatorv1 "github.com/openshift/api/operator/v1"
 	routev1 "github.com/openshift/api/route/v1"
+	authzlisters "github.com/openshift/client-go/authorization/listers/authorization/v1"
 	"github.com/openshift/cluster-authentication-operator/bindata"
 	"github.com/openshift/cluster-authentication-operator/pkg/controllers/common"
 	"github.com/openshift/cluster-authentication-operator/pkg/controllers/configobservation/configobservercontroller"
@@ -135,18 +136,19 @@ func prepareOauthOperator(
 		informerFactories.kubeInformersForNamespaces.InformersFor("openshift-kube-apiserver").Core().V1().ConfigMaps(),
 	)
 
+	rbrInformer := informerFactories.authzInformers.Authorization().V1().RoleBindingRestrictions()
 	staticResourceController := staticresourcecontroller.NewStaticResourceController(
 		"OpenshiftAuthenticationStaticResources",
 		bindata.Asset,
 		[]string{ // required resources
 			"oauth-openshift/audit-policy.yaml",
 			"oauth-openshift/ns.yaml",
-			"oauth-openshift/authorization.openshift.io_rolebindingrestrictions.yaml",
 		},
 		resourceapply.NewKubeClientHolder(authOperatorInput.kubeClient).WithAPIExtensionsClient(authOperatorInput.apiextensionClient),
 		authOperatorInput.authenticationOperatorClient,
 		authOperatorInput.eventRecorder,
 	).AddKubeInformers(informerFactories.kubeInformersForNamespaces).
+		AddInformer(rbrInformer.Informer()).
 		WithConditionalResources(bindata.Asset,
 			// OAuth specific resources; deleted when OIDC is enabled
 			[]string{
@@ -165,6 +167,22 @@ func prepareOauthOperator(
 			// shouldDeleteFnArg
 			func() bool {
 				return oidcAvailable(authConfigChecker)
+			},
+		).
+		WithConditionalResources(bindata.Asset,
+			[]string{
+				"oauth-openshift/authorization.openshift.io_rolebindingrestrictions.yaml",
+			},
+			// shouldCreateFnArg
+			func() bool {
+				return !oidcAvailable(authConfigChecker)
+			},
+			// shouldDeleteFnArg
+			func() bool {
+				// we must only delete the rolebindingrestrictions CRD when no resources exist
+				// externalOIDCController also detects this and will return a sync error when
+				// OIDC is available but rolebindingrestrictions still exist
+				return oidcAvailable(authConfigChecker) && !roleBindingRestrictionsExist(rbrInformer.Lister())
 			},
 		)
 
@@ -743,11 +761,13 @@ func prepareExternalOIDC(
 		return nil, nil, nil
 	}
 
+	rbrInformer := informerFactories.authzInformers.Authorization().V1().RoleBindingRestrictions()
 	externalOIDCController := externaloidc.NewExternalOIDCController(
 		informerFactories.kubeInformersForNamespaces,
 		informerFactories.operatorConfigInformer,
 		authOperatorInput.authenticationOperatorClient,
 		authOperatorInput.kubeClient.CoreV1(),
+		rbrInformer,
 		authOperatorInput.eventRecorder,
 		featureGates,
 	)
@@ -832,6 +852,15 @@ func oidcAvailable(authConfigChecker common.AuthConfigChecker) bool {
 		klog.Infof("error while checking auth config: %v", err)
 	}
 	return oidcAvailable
+}
+
+func roleBindingRestrictionsExist(rbrLister authzlisters.RoleBindingRestrictionLister) bool {
+	rbrs, err := rbrLister.List(labels.Everything())
+	if err != nil {
+		klog.Infof("error while listing rolebindingrestrictions: %v", err)
+	}
+
+	return len(rbrs) > 0
 }
 
 func apiServicesFuncWrapper(authConfigChecker common.AuthConfigChecker) func() ([]*apiregistrationv1.APIService, []*apiregistrationv1.APIService, error) {
